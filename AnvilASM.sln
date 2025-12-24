@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Anvil", "Anvil\Anvil.csproj", "{304A1827-757D-4222-836C-9FE514E04117}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AnvilTests", "AnvilTests\AnvilTests.csproj", "{A4A3CDE4-DE06-4FCE-8ED4-BCBF2A700626}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{304A1827-757D-4222-836C-9FE514E04117}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{304A1827-757D-4222-836C-9FE514E04117}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{304A1827-757D-4222-836C-9FE514E04117}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{304A1827-757D-4222-836C-9FE514E04117}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A4A3CDE4-DE06-4FCE-8ED4-BCBF2A700626}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A4A3CDE4-DE06-4FCE-8ED4-BCBF2A700626}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A4A3CDE4-DE06-4FCE-8ED4-BCBF2A700626}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A4A3CDE4-DE06-4FCE-8ED4-BCBF2A700626}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
