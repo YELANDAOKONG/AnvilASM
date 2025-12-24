@@ -50,10 +50,15 @@ public class AttributeInfo : IStructure<AttributeInfo>
     {
         if (AttributeNameIndex.Value == 0 || AttributeNameIndex.Value >= constantPool.Length)
         {
-            return null;
+            return null; 
         }
 
         var entry = constantPool[AttributeNameIndex.Value];
+        if (entry == null)
+        {
+            return null;
+        }
+
         if (entry is not CpUtf8 utf8Name)
         {
             return null;
@@ -61,4 +66,5 @@ public class AttributeInfo : IStructure<AttributeInfo>
 
         return AttributeFactory.Create(utf8Name.Value, Info);
     }
+
 }
