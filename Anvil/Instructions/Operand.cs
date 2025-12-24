@@ -1,5 +1,3 @@
-using System;
-
 namespace Anvil.Instructions;
 
 public class Operand
@@ -47,4 +45,17 @@ public class Operand
 
     public static Operand NewArrayAtype(byte atype)
         => new(OperandType.NewArrayAtype, atype);
+    
+    public static Operand TableSwitch(int defaultOffset, int low, int high, int[] offsets)
+    {
+        // Note: Actual byte generation for switches depends on alignment padding relative to the start of the method.
+        // The data here is a placeholder. Serialization logic must handle padding (0-3 bytes).
+        return new(OperandType.TableSwitchData, Array.Empty<byte>()); 
+    }
+
+    public static Operand LookupSwitch(int defaultOffset, (int match, int offset)[] pairs)
+    {
+        // Note: Similar to TableSwitch, alignment padding is required during serialization.
+        return new(OperandType.LookupSwitchData, Array.Empty<byte>()); 
+    }
 }

@@ -14,11 +14,12 @@ public class Code
         Operands = operands.ToList().AsReadOnly();
 
         // Automatically add wide prefix if applicable
-        if (OperationCodeMapping.TryGetInfo(opCode, out var info) && info.CanBeWide)
+        if (OperationCodeMapping.TryGetInfo(opCode, out var info) && info!.CanBeWide)
         {
+            // Check if operands exceed standard size limits requiring WIDE
             bool needsWide = Operands.Any(o =>
-                (o.Type == OperandType.LocalIndex && o.Data.Length == 2) ||
-                (o.Type == OperandType.IincPair && o.Data.Length == 4));
+                (o.Type == OperandType.LocalIndex && o.Data.Length == 2) || // Index > 255
+                (o.Type == OperandType.IincPair && o.Data.Length == 4));    // Index > 255 or Increment > 127
 
             if (needsWide)
                 WidePrefix = OperationCode.WIDE;
@@ -43,9 +44,9 @@ public class Code
         return sb.ToString();
     }
 
-    // ================== Factory method ==================
+    // ================== Factory Methods ==================
 
-    // Constant push
+    // Push Constants
     public static Code PushInt(int value)
     {
         return value switch
@@ -59,7 +60,7 @@ public class Code
             5 => new(OperationCode.ICONST_5),
             >= sbyte.MinValue and <= sbyte.MaxValue => new(OperationCode.BIPUSH, Operand.ByteImmediate((sbyte)value)),
             >= short.MinValue and <= short.MaxValue => new(OperationCode.SIPUSH, Operand.ShortImmediate((short)value)),
-            _ => throw new ArgumentOutOfRangeException(nameof(value), "Use ldc for large int")
+            _ => throw new ArgumentOutOfRangeException(nameof(value), "Value is too large for immediate push. Use 'ldc' instead.")
         };
     }
 
@@ -67,7 +68,7 @@ public class Code
     {
         if (value == 0) return new(OperationCode.LCONST_0);
         if (value == 1) return new(OperationCode.LCONST_1);
-        throw new ArgumentOutOfRangeException(nameof(value), "Use ldc2_w for arbitrary long");
+        throw new ArgumentOutOfRangeException(nameof(value), "Value cannot be optimized to a constant instruction. Use 'ldc2_w' instead.");
     }
 
     public static Code PushFloat(float value)
@@ -75,17 +76,17 @@ public class Code
         if (value == 0f) return new(OperationCode.FCONST_0);
         if (value == 1f) return new(OperationCode.FCONST_1);
         if (value == 2f) return new(OperationCode.FCONST_2);
-        throw new ArgumentOutOfRangeException(nameof(value), "Use ldc for arbitrary float");
+        throw new ArgumentOutOfRangeException(nameof(value), "Value cannot be optimized to a constant instruction. Use 'ldc' instead.");
     }
 
     public static Code PushDouble(double value)
     {
         if (value == 0.0) return new(OperationCode.DCONST_0);
         if (value == 1.0) return new(OperationCode.DCONST_1);
-        throw new ArgumentOutOfRangeException(nameof(value), "Use ldc2_w for arbitrary double");
+        throw new ArgumentOutOfRangeException(nameof(value), "Value cannot be optimized to a constant instruction. Use 'ldc2_w' instead.");
     }
 
-    // ldc series
+    // LDC Series (Load Constants)
     public static Code Ldc(ushort cpIndex)
     {
         if (cpIndex <= 0xFF)
@@ -95,7 +96,7 @@ public class Code
 
     public static Code Ldc2(ushort cpIndex) => new(OperationCode.LDC2_W, Operand.ConstantPoolIndex(cpIndex));
 
-    // Load local variables
+    // Load Local Variables
     public static Code ILoad(ushort index)
         => new(OperationCode.ILOAD, index <= 0xFF ? Operand.LocalIndex((byte)index) : Operand.WideLocalIndex(index));
 
@@ -105,7 +106,7 @@ public class Code
     public static Code ALoad(ushort index)
         => new(OperationCode.ALOAD, index <= 0xFF ? Operand.LocalIndex((byte)index) : Operand.WideLocalIndex(index));
 
-    // Store local variables
+    // Store Local Variables
     public static Code IStore(ushort index)
         => new(OperationCode.ISTORE, index <= 0xFF ? Operand.LocalIndex((byte)index) : Operand.WideLocalIndex(index));
 
@@ -115,7 +116,7 @@ public class Code
     public static Code AStore(ushort index)
         => new(OperationCode.ASTORE, index <= 0xFF ? Operand.LocalIndex((byte)index) : Operand.WideLocalIndex(index));
 
-    // Method call
+    // Method Invocations
     public static Code InvokeVirtual(ushort methodIndex)
         => new(OperationCode.INVOKEVIRTUAL, Operand.ConstantPoolIndex(methodIndex));
 
@@ -128,7 +129,7 @@ public class Code
     public static Code InvokeInterface(ushort methodIndex, byte argsCount)
         => new(OperationCode.INVOKEINTERFACE, Operand.InvokeInterface(methodIndex, argsCount));
 
-    // Object creation
+    // Object Creation
     public static Code New(ushort classIndex)
         => new(OperationCode.NEW, Operand.ConstantPoolIndex(classIndex));
 
@@ -141,16 +142,16 @@ public class Code
     public static Code MultiANewArray(ushort classIndex, byte dimensions)
         => new(OperationCode.MULTIANEWARRAY, Operand.MultiANewArray(classIndex, dimensions));
 
-    // Branch
+    // Control Flow / Branching
     public static Code Goto(short offset) => new(OperationCode.GOTO, Operand.BranchOffset(offset));
     public static Code IfEq(short offset) => new(OperationCode.IFEQ, Operand.BranchOffset(offset));
     public static Code IfNull(short offset) => new(OperationCode.IFNULL, Operand.BranchOffset(offset));
 
-    // Increment
+    // Local Variable Increment
     public static Code IInc(ushort index, short increment)
         => new(OperationCode.IINC, Operand.Iinc(index, increment));
 
-    // Return
+    // Return Instructions
     public static Code ReturnVoid() => new(OperationCode.RETURN);
     public static Code IReturn() => new(OperationCode.IRETURN);
     public static Code LReturn() => new(OperationCode.LRETURN);

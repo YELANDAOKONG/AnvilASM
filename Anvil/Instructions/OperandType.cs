@@ -12,5 +12,6 @@ public enum OperandType
     InvokeInterfaceArgs,  // index(2) + count(1) + zero(1)
     MultiANewArrayArgs,   // index(2) + dims(1)
     NewArrayAtype,        // 1 byte atype
-    // tableswitch / lookupswitch
+    TableSwitchData,
+    LookupSwitchData,
 }
