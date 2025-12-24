@@ -32,9 +32,10 @@ enum State {
 
 // ==========================================
 // 4. MAIN CLASS
+// File name must be: Test.java
 // ==========================================
 @TestMetadata(version = 1)
-public class Test<T> implements Cloneable { // ComprehensiveTest
+public class Test<T> implements Cloneable {
 
     // ==========================================
     // FIELDS
@@ -59,7 +60,7 @@ public class Test<T> implements Cloneable { // ComprehensiveTest
     // ==========================================
     // CONSTRUCTORS
     // ==========================================
-    public ComprehensiveTest() {
+    public Test() {
         this.isRunning = true;
         this.complexArray = new double[2][2][2];
     }
@@ -201,7 +202,7 @@ public class Test<T> implements Cloneable { // ComprehensiveTest
     public static void main(String[] args) {
         System.out.println("=== Starting Bytecode Analysis Test ===");
 
-        ComprehensiveTest<Integer> test = new ComprehensiveTest<>();
+        Test<Integer> test = new Test<>();
 
         // Run Control Flow
         System.out.println("Switch: " + test.testControlFlow(1));
