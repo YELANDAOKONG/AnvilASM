@@ -13,6 +13,9 @@ public class Operand
         Type = type;
         Data = data ?? Array.Empty<byte>();
     }
+    
+    internal static Operand FromRawBytes(OperandType type, byte[] data) 
+        => new(type, data);
 
     public override string ToString()
     {
@@ -49,6 +52,12 @@ public class Operand
         return new(OperandType.IincPair, (byte)(index >> 8), (byte)index, (byte)(inc >> 8), (byte)inc);
     }
 
+    public static Operand InvokeDynamic(ushort index)
+    {
+        return new Operand(OperandType.InvokeDynamicArgs, 
+            (byte)(index >> 8), (byte)index, 0, 0);
+    }
+    
     public static Operand InvokeInterface(ushort methodIndex, byte argsCount)
         => new(OperandType.InvokeInterfaceArgs, (byte)(methodIndex >> 8), (byte)methodIndex, argsCount, 0);
 

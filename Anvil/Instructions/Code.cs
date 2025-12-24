@@ -46,7 +46,6 @@ public class Code
         {
             sb.Append(" ");
             
-            // Avoid printing massive binary blobs for switch instructions in debug output
             if (OpCode == OperationCode.TABLESWITCH || OpCode == OperationCode.LOOKUPSWITCH)
             {
                 sb.Append("[Switch Data]");
@@ -210,7 +209,7 @@ public class Code
         => new(OperationCode.INVOKEINTERFACE, Operand.InvokeInterface(methodIndex, argsCount));
     
     public static Code InvokeDynamic(ushort callSiteIndex)
-        => new(OperationCode.INVOKEDYNAMIC, Operand.ConstantPoolIndex(callSiteIndex), Operand.LocalIndex(0)); // 0 is reserved byte
+        => new(OperationCode.INVOKEDYNAMIC, Operand.InvokeDynamic(callSiteIndex));
 
     // --- Object & Array ---
 

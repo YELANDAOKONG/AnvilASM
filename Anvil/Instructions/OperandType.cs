@@ -14,4 +14,5 @@ public enum OperandType
     NewArrayAtype,        // 1 byte atype
     TableSwitchData,
     LookupSwitchData,
+    InvokeDynamicArgs,    // index(2) + 0(1) + 0(1)
 }

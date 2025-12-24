@@ -203,5 +203,9 @@ public enum OperationCode : byte
     IFNULL = 0xC6,
     IFNONNULL = 0xC7,
     GOTO_W = 0xC8,
-    JSR_W = 0xC9
+    JSR_W = 0xC9,
+    
+    BREAKPOINT = 0xCA,
+    IMPDEP1 = 0xFE,
+    IMPDEP2 = 0xFF
 }

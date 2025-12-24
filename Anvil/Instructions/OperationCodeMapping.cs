@@ -2,11 +2,10 @@ namespace Anvil.Instructions;
 
 public static class OperationCodeMapping
 {
-    // Cache the empty array to reduce allocations
-    private static readonly int[] NoOperands = Array.Empty<int>();
+    private static readonly OperandDefinition[] NoOperands = Array.Empty<OperandDefinition>();
     
-    // Helper for cleaner initialization
-    private static InstructionInfo ZeroOp() => new(0, NoOperands);
+    private static InstructionInfo ZeroOp() => new(NoOperands);
+    private static InstructionInfo SingleOp(int size, OperandType type) => new(new[] { new OperandDefinition(size, type) });
 
     private static readonly Dictionary<OperationCode, InstructionInfo> Mapping = new()
     {
@@ -119,74 +118,124 @@ public static class OperationCodeMapping
         [OperationCode.ARETURN] = ZeroOp(),
         [OperationCode.RETURN] = ZeroOp(),
 
-        // Single operand instructions
-        [OperationCode.BIPUSH] = new(1, new[] { 1 }),
-        [OperationCode.SIPUSH] = new(1, new[] { 2 }),
-        [OperationCode.LDC] = new(1, new[] { 1 }),
-        [OperationCode.LDC_W] = new(1, new[] { 2 }),
-        [OperationCode.LDC2_W] = new(1, new[] { 2 }),
-        [OperationCode.ILOAD] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.LLOAD] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.FLOAD] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.DLOAD] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.ALOAD] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.ISTORE] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.LSTORE] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.FSTORE] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.DSTORE] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.ASTORE] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.RET] = new(1, new[] { 1 }, canBeWide: true),
-        [OperationCode.IINC] = new(2, new[] { 1, 1 }, canBeWide: true),
-        [OperationCode.NEWARRAY] = new(1, new[] { 1 }),
-        [OperationCode.NEW] = new(1, new[] { 2 }),
-        [OperationCode.ANEWARRAY] = new(1, new[] { 2 }),
-        [OperationCode.CHECKCAST] = new(1, new[] { 2 }),
-        [OperationCode.INSTANCEOF] = new(1, new[] { 2 }),
-        [OperationCode.GETSTATIC] = new(1, new[] { 2 }),
-        [OperationCode.PUTSTATIC] = new(1, new[] { 2 }),
-        [OperationCode.GETFIELD] = new(1, new[] { 2 }),
-        [OperationCode.PUTFIELD] = new(1, new[] { 2 }),
-        [OperationCode.INVOKEVIRTUAL] = new(1, new[] { 2 }),
-        [OperationCode.INVOKESPECIAL] = new(1, new[] { 2 }),
-        [OperationCode.INVOKESTATIC] = new(1, new[] { 2 }),
-        [OperationCode.INVOKEDYNAMIC] = new(2, new[] { 2, 2 }), // bootstrap_method_attr_index + name_and_type_index
-        [OperationCode.IFEQ] = new(1, new[] { 2 }),
-        [OperationCode.IFNE] = new(1, new[] { 2 }),
-        [OperationCode.IFLT] = new(1, new[] { 2 }),
-        [OperationCode.IFGE] = new(1, new[] { 2 }),
-        [OperationCode.IFGT] = new(1, new[] { 2 }),
-        [OperationCode.IFLE] = new(1, new[] { 2 }),
-        [OperationCode.IF_ICMPEQ] = new(1, new[] { 2 }),
-        [OperationCode.IF_ICMPNE] = new(1, new[] { 2 }),
-        [OperationCode.IF_ICMPLT] = new(1, new[] { 2 }),
-        [OperationCode.IF_ICMPGE] = new(1, new[] { 2 }),
-        [OperationCode.IF_ICMPGT] = new(1, new[] { 2 }),
-        [OperationCode.IF_ICMPLE] = new(1, new[] { 2 }),
-        [OperationCode.IF_ACMPEQ] = new(1, new[] { 2 }),
-        [OperationCode.IF_ACMPNE] = new(1, new[] { 2 }),
-        [OperationCode.IFNULL] = new(1, new[] { 2 }),
-        [OperationCode.IFNONNULL] = new(1, new[] { 2 }),
-        [OperationCode.GOTO] = new(1, new[] { 2 }),
-        [OperationCode.JSR] = new(1, new[] { 2 }),
-        [OperationCode.GOTO_W] = new(1, new[] { 4 }),
-        [OperationCode.JSR_W] = new(1, new[] { 4 }),
+        // Reserved Instructions
+        [OperationCode.BREAKPOINT] = ZeroOp(),
+        [OperationCode.IMPDEP1] = ZeroOp(),
+        [OperationCode.IMPDEP2] = ZeroOp(),
 
-        // Special multiple operands instructions
-        [OperationCode.INVOKEINTERFACE] = new(3, new[] { 2, 1, 1 }),
-        [OperationCode.MULTIANEWARRAY] = new(2, new[] { 2, 1 }),
+        // Single operand instructions
+        [OperationCode.BIPUSH] = SingleOp(1, OperandType.ByteImmediate),
+        [OperationCode.SIPUSH] = SingleOp(2, OperandType.ShortImmediate),
+        [OperationCode.LDC] = SingleOp(1, OperandType.ConstantPoolIndex),
+        [OperationCode.LDC_W] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.LDC2_W] = SingleOp(2, OperandType.ConstantPoolIndex),
+        
+        // Local Variables (Can be Wide)
+        [OperationCode.ILOAD] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        [OperationCode.LLOAD] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        [OperationCode.FLOAD] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        [OperationCode.DLOAD] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        [OperationCode.ALOAD] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        [OperationCode.ISTORE] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        [OperationCode.LSTORE] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        [OperationCode.FSTORE] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        [OperationCode.DSTORE] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        [OperationCode.ASTORE] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        [OperationCode.RET] = SingleOp(1, OperandType.LocalIndex).WithWide(),
+        
+        // IINC (Special case: 2 operands)
+        [OperationCode.IINC] = new InstructionInfo(new[] 
+        { 
+            new OperandDefinition(1, OperandType.LocalIndex), 
+            new OperandDefinition(1, OperandType.ByteImmediate) // Treated as immediate for parsing
+        }, canBeWide: true),
+
+        [OperationCode.NEWARRAY] = SingleOp(1, OperandType.NewArrayAtype),
+        [OperationCode.NEW] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.ANEWARRAY] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.CHECKCAST] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.INSTANCEOF] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.GETSTATIC] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.PUTSTATIC] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.GETFIELD] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.PUTFIELD] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.INVOKEVIRTUAL] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.INVOKESPECIAL] = SingleOp(2, OperandType.ConstantPoolIndex),
+        [OperationCode.INVOKESTATIC] = SingleOp(2, OperandType.ConstantPoolIndex),
+        
+        // Dynamic Invocation
+        [OperationCode.INVOKEDYNAMIC] = new InstructionInfo(new[]
+        {
+            new OperandDefinition(4, OperandType.InvokeDynamicArgs) 
+        }),
+
+        // Branching
+        [OperationCode.IFEQ] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IFNE] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IFLT] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IFGE] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IFGT] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IFLE] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IF_ICMPEQ] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IF_ICMPNE] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IF_ICMPLT] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IF_ICMPGE] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IF_ICMPGT] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IF_ICMPLE] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IF_ACMPEQ] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IF_ACMPNE] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IFNULL] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.IFNONNULL] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.GOTO] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.JSR] = SingleOp(2, OperandType.BranchOffset),
+        [OperationCode.GOTO_W] = SingleOp(4, OperandType.BranchOffset),
+        [OperationCode.JSR_W] = SingleOp(4, OperandType.BranchOffset),
+
+        // Special multiple operands
+        [OperationCode.INVOKEINTERFACE] = new InstructionInfo(new[]
+        {
+            // Treated as one 4-byte operand to ensure correct serialization of the 'count' and '0' bytes
+            new OperandDefinition(4, OperandType.InvokeInterfaceArgs)
+        }),
+        
+        [OperationCode.MULTIANEWARRAY] = new InstructionInfo(new[]
+        {
+            new OperandDefinition(2, OperandType.ConstantPoolIndex),
+            new OperandDefinition(1, OperandType.ByteImmediate) // dimensions
+        }),
+        
+        // Switches (Variable length, handled specially)
+        [OperationCode.TABLESWITCH] = new InstructionInfo(Array.Empty<OperandDefinition>()),
+        [OperationCode.LOOKUPSWITCH] = new InstructionInfo(Array.Empty<OperandDefinition>()),
     };
+
+    public readonly struct OperandDefinition
+    {
+        public int Size { get; }
+        public OperandType Type { get; }
+
+        public OperandDefinition(int size, OperandType type)
+        {
+            Size = size;
+            Type = type;
+        }
+    }
 
     public class InstructionInfo
     {
-        public int OperandCount { get; }
-        public int[] OperandSizes { get; }
-        public bool CanBeWide { get; }
+        public OperandDefinition[] Operands { get; }
+        public bool CanBeWide { get; private set; }
 
-        public InstructionInfo(int count, int[] sizes, bool canBeWide = false)
+        public InstructionInfo(OperandDefinition[] operands, bool canBeWide = false)
         {
-            OperandCount = count;
-            OperandSizes = sizes;
+            Operands = operands;
             CanBeWide = canBeWide;
+        }
+
+        public InstructionInfo WithWide()
+        {
+            CanBeWide = true;
+            return this;
         }
     }
 
