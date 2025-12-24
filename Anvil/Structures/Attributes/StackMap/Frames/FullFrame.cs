@@ -1,7 +1,6 @@
-using Anvil.Structures.Attributes.StackMap.Frames;
 using Anvil.Types;
 
-namespace Anvil.Structures.Attributes.StackMap;
+namespace Anvil.Structures.Attributes.StackMap.Frames;
 
 // §4.7.4 full_frame
 public class FullFrame : StackMapFrame
