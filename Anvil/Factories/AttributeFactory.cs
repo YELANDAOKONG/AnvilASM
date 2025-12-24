@@ -43,6 +43,15 @@ public static class AttributeFactory
             "RuntimeInvisibleTypeAnnotations" => RuntimeInvisibleTypeAnnotationsAttribute.Read(stream),
             "AnnotationDefault" => AnnotationDefaultAttribute.Read(stream),
             "BootstrapMethods" => BootstrapMethodsAttribute.Read(stream),
+            "MethodParameters" => MethodParametersAttribute.Read(stream),
+            "Module" => ModuleAttribute.Read(stream),
+            "ModulePackages" => ModulePackagesAttribute.Read(stream),
+            "ModuleMainClass" => ModuleMainClassAttribute.Read(stream),
+            "NestHost" => NestHostAttribute.Read(stream),
+            "NestMembers" => NestMembersAttribute.Read(stream),
+            "Record" => RecordAttribute.Read(stream),
+            "PermittedSubclasses" => PermittedSubclassesAttribute.Read(stream),
+            
             _ => null
         };
     }
