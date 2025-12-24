@@ -21,21 +21,29 @@ public static class AttributeFactory
 
         return name switch
         {
-            "ConstantValue"          => ConstantValueAttribute.Read(stream),
-            "Code"                   => CodeAttribute.Read(stream),
-            "StackMapTable"          => StackMapTableAttribute.Read(stream),
-            "Exceptions"             => ExceptionsAttribute.Read(stream),
-            "InnerClasses"           => InnerClassesAttribute.Read(stream),
-            "EnclosingMethod"        => EnclosingMethodAttribute.Read(stream),
-            "Synthetic"              => SyntheticAttribute.Read(stream),
-            "Signature"              => SignatureAttribute.Read(stream),
-            "SourceFile"             => SourceFileAttribute.Read(stream),
-            "SourceDebugExtension"   => SourceDebugExtensionAttribute.Read(data), // Pass raw data
-            "LineNumberTable"        => LineNumberTableAttribute.Read(stream),
-            "LocalVariableTable"     => LocalVariableTableAttribute.Read(stream),
+            "ConstantValue" => ConstantValueAttribute.Read(stream),
+            "Code" => CodeAttribute.Read(stream),
+            "StackMapTable" => StackMapTableAttribute.Read(stream),
+            "Exceptions" => ExceptionsAttribute.Read(stream),
+            "InnerClasses" => InnerClassesAttribute.Read(stream),
+            "EnclosingMethod" => EnclosingMethodAttribute.Read(stream),
+            "Synthetic" => SyntheticAttribute.Read(stream),
+            "Signature" => SignatureAttribute.Read(stream),
+            "SourceFile" => SourceFileAttribute.Read(stream),
+            "SourceDebugExtension" => SourceDebugExtensionAttribute.Read(data),
+            "LineNumberTable" => LineNumberTableAttribute.Read(stream),
+            "LocalVariableTable" => LocalVariableTableAttribute.Read(stream),
             "LocalVariableTypeTable" => LocalVariableTypeTableAttribute.Read(stream),
-            "Deprecated"             => DeprecatedAttribute.Read(stream),
-            _                        => null
+            "Deprecated" => DeprecatedAttribute.Read(stream),
+            "RuntimeVisibleAnnotations" => RuntimeVisibleAnnotationsAttribute.Read(stream),
+            "RuntimeInvisibleAnnotations" => RuntimeInvisibleAnnotationsAttribute.Read(stream),
+            "RuntimeVisibleParameterAnnotations" => RuntimeVisibleParameterAnnotationsAttribute.Read(stream),
+            "RuntimeInvisibleParameterAnnotations" => RuntimeInvisibleParameterAnnotationsAttribute.Read(stream),
+            "RuntimeVisibleTypeAnnotations" => RuntimeVisibleTypeAnnotationsAttribute.Read(stream),
+            "RuntimeInvisibleTypeAnnotations" => RuntimeInvisibleTypeAnnotationsAttribute.Read(stream),
+            "AnnotationDefault" => AnnotationDefaultAttribute.Read(stream),
+            "BootstrapMethods" => BootstrapMethodsAttribute.Read(stream),
+            _ => null
         };
     }
 }
