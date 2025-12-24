@@ -17,11 +17,14 @@ public static class AttributeFactory
 
         return name switch
         {
-            "InnerClasses" => InnerClassesAttribute.Read(stream),
-            "SourceFile"   => SourceFileAttribute.Read(stream),
-            // "Code"      => CodeAttribute.Read(stream),
-            // "Signature" => SignatureAttribute.Read(stream),
-            _              => null
+            "ConstantValue" => ConstantValueAttribute.Read(stream),
+            "Code"          => CodeAttribute.Read(stream),
+            "StackMapTable" => StackMapTableAttribute.Read(stream),
+            "Exceptions"    => ExceptionsAttribute.Read(stream),
+            "InnerClasses"  => InnerClassesAttribute.Read(stream),
+            "SourceFile"    => SourceFileAttribute.Read(stream),
+            // "Signature"  => SignatureAttribute.Read(stream),
+            _               => null
         };
     }
 }
