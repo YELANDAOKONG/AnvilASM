@@ -34,7 +34,7 @@ enum State {
 // 4. MAIN CLASS
 // ==========================================
 @TestMetadata(version = 1)
-public class ComprehensiveTest<T> implements Cloneable {
+public class Test<T> implements Cloneable { // ComprehensiveTest
 
     // ==========================================
     // FIELDS
