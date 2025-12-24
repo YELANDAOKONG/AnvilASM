@@ -1,4 +1,6 @@
+using Anvil.Factories;
 using Anvil.Interfaces;
+using Anvil.Structures.ConstantPool;
 using Anvil.Types;
 
 namespace Anvil.Structures;
@@ -37,5 +39,26 @@ public class AttributeInfo : IStructure<AttributeInfo>
         stream.ReadExactly(attr.Info);
         
         return attr;
+    }
+    
+    /// <summary>
+    /// Attempts to parse the raw Info bytes into a strongly-typed structure.
+    /// </summary>
+    /// <param name="constantPool">The constant pool to resolve the attribute name.</param>
+    /// <returns>The parsed body interface, or null if the attribute is unknown.</returns>
+    public IAttribute? ResolveBody(CpInfo?[] constantPool)
+    {
+        if (AttributeNameIndex.Value == 0 || AttributeNameIndex.Value >= constantPool.Length)
+        {
+            return null;
+        }
+
+        var entry = constantPool[AttributeNameIndex.Value];
+        if (entry is not CpUtf8 utf8Name)
+        {
+            return null;
+        }
+
+        return AttributeFactory.Create(utf8Name.Value, Info);
     }
 }

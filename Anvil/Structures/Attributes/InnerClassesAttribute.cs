@@ -4,7 +4,7 @@ using Anvil.Types;
 
 namespace Anvil.Structures.Attributes;
 
-public class InnerClassesAttribute : IStructure<InnerClassesAttribute>
+public class InnerClassesAttribute : IStructure<InnerClassesAttribute>, IAttribute
 {
     public TUShort NumberOfClasses { get; set; }
     public InnerClassInfo[] Classes { get; set; } = Array.Empty<InnerClassInfo>();
