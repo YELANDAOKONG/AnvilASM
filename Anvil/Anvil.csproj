@@ -15,11 +15,9 @@
     <ItemGroup>
       <Folder Include="Core\" />
       <Folder Include="Instructions\" />
-      <Folder Include="Interfaces\" />
       <Folder Include="IO\" />
       <Folder Include="Models\" />
       <Folder Include="Structures\" />
-      <Folder Include="Types\" />
       <Folder Include="Utilities\" />
     </ItemGroup>
 
