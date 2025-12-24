@@ -16,6 +16,7 @@
       <Folder Include="Core\" />
       <Folder Include="IO\" />
       <Folder Include="Models\" />
+      <Folder Include="Serialization\" />
     </ItemGroup>
 
 </Project>
