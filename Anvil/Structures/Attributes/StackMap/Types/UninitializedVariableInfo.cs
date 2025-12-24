@@ -1,6 +1,6 @@
 using Anvil.Types;
 
-namespace Anvil.Structures.Attributes.StackMap;
+namespace Anvil.Structures.Attributes.StackMap.Types;
 
 public class UninitializedVariableInfo : VerificationTypeInfo
 {
