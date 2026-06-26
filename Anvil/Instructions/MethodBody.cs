@@ -1,4 +1,5 @@
 using Anvil.Instructions.ConstantPool;
+using Anvil.Instructions.StackMap;
 using Anvil.Structures;
 using Anvil.Structures.Attributes;
 using Anvil.Structures.Attributes.Code;
@@ -11,6 +12,8 @@ public class MethodBody
 {
     public int MaxStack { get; set; }
     public int MaxLocals { get; set; }
+    public string? MethodDescriptor { get; set; }
+    public bool IsStatic { get; set; }
 
     public List<Instruction> Instructions { get; set; } = [];
     public List<TryCatchBlock> TryCatchBlocks { get; set; } = [];
@@ -133,8 +136,9 @@ public class MethodBody
 
             var needsWidening = false;
 
-            foreach (var instruction in Instructions)
+            for (var idx = 0; idx < Instructions.Count; idx++)
             {
+                var instruction = Instructions[idx];
                 switch (instruction)
                 {
                     case JumpInstruction jump:
@@ -144,7 +148,16 @@ public class MethodBody
 
                         if (jump.NeedsWidening)
                         {
-                            jump.UpgradeToWide();
+                            if (jump.OpCode is OperationCode.GOTO or OperationCode.JSR)
+                            {
+                                jump.UpgradeToWide();
+                            }
+                            else
+                            {
+                                InvertConditionalJumpAndInsertGotoW(Instructions, idx, jump, targetOffset);
+                                idx++;
+                            }
+
                             needsWidening = true;
                         }
 
@@ -197,16 +210,19 @@ public class MethodBody
         for (var i = 0; i < TryCatchBlocks.Count; i++)
         {
             var block = TryCatchBlocks[i];
+            var catchTypeIndex = block.CatchType != null
+                ? cp.AddClass(block.CatchType)
+                : 0;
             exceptionTable[i] = new ExceptionTableEntry
             {
                 StartPc = new TUShort((ushort)GetLabelOffset(block.Start)),
                 EndPc = new TUShort((ushort)GetLabelOffset(block.End)),
                 HandlerPc = new TUShort((ushort)GetLabelOffset(block.Handler)),
-                CatchType = new TUShort(0) // TODO: resolve CatchType to CP index via builder
+                CatchType = new TUShort((ushort)catchTypeIndex)
             };
         }
 
-        return new CodeAttribute
+        var codeAttr = new CodeAttribute
         {
             MaxStack = new TUShort((ushort)MaxStack),
             MaxLocals = new TUShort((ushort)MaxLocals),
@@ -214,6 +230,17 @@ public class MethodBody
             ExceptionTable = exceptionTable,
             Attributes = Attributes.ToArray()
         };
+
+        if (MethodDescriptor != null)
+        {
+            var sfc = new StackFrameCalculator(this, MethodDescriptor, IsStatic, cp);
+            var smt = sfc.Compute();
+            var smtAttr = AttributeInfo.CreateFromAttribute("StackMapTable", smt, cp);
+            var attrs = new List<AttributeInfo>(codeAttr.Attributes) { smtAttr };
+            codeAttr.Attributes = attrs.ToArray();
+        }
+
+        return codeAttr;
     }
 
     private void ResolveCpReferences(ConstantPoolBuilder cp)
@@ -237,8 +264,33 @@ public class MethodBody
                 case MultiANewArrayInstruction multi:
                     multi.Resolve(cp);
                     break;
+                case InvokeDynamicInstruction indy:
+                    indy.Resolve(cp);
+                    break;
             }
         }
+    }
+
+    private static InvokeDynamicInstruction ResolveInvokeDynamic(CpInfo[] constantPool, int index)
+    {
+        if (index <= 0 || index >= constantPool.Length)
+        {
+            return new InvokeDynamicInstruction(index);
+        }
+
+        if (constantPool[index] is CpInvokeDynamic indyEntry)
+        {
+            var natIndex = indyEntry.NameAndTypeIndex.Value;
+            if (natIndex > 0 && natIndex < constantPool.Length
+                && constantPool[natIndex] is CpNameAndType nat)
+            {
+                var name = ((CpUtf8)constantPool[nat.NameIndex.Value]!).Value;
+                var descriptor = ((CpUtf8)constantPool[nat.DescriptorIndex.Value]!).Value;
+                return new InvokeDynamicInstruction(index, name, descriptor);
+            }
+        }
+
+        return new InvokeDynamicInstruction(index);
     }
 
     private int GetLabelOffset(Label label)
@@ -254,6 +306,45 @@ public class MethodBody
         }
 
         throw new InvalidOperationException($"Label '{label}' has not been resolved.");
+    }
+
+    private static void InvertConditionalJumpAndInsertGotoW(
+        List<Instruction> instructions,
+        int jumpIndex,
+        JumpInstruction jump,
+        int farTargetOffset)
+    {
+        var originalTarget = jump.Target;
+        var skipLabel = new Label();
+        jump.OpCode = InvertBranchOpcode(jump.OpCode);
+        jump.Target = skipLabel;
+
+        var gotoInsn = new JumpInstruction(OperationCode.GOTO_W, originalTarget);
+        instructions.Insert(jumpIndex + 1, gotoInsn);
+    }
+
+    private static OperationCode InvertBranchOpcode(OperationCode op)
+    {
+        return op switch
+        {
+            OperationCode.IFEQ => OperationCode.IFNE,
+            OperationCode.IFNE => OperationCode.IFEQ,
+            OperationCode.IFLT => OperationCode.IFGE,
+            OperationCode.IFGE => OperationCode.IFLT,
+            OperationCode.IFGT => OperationCode.IFLE,
+            OperationCode.IFLE => OperationCode.IFGT,
+            OperationCode.IF_ICMPEQ => OperationCode.IF_ICMPNE,
+            OperationCode.IF_ICMPNE => OperationCode.IF_ICMPEQ,
+            OperationCode.IF_ICMPLT => OperationCode.IF_ICMPGE,
+            OperationCode.IF_ICMPGE => OperationCode.IF_ICMPLT,
+            OperationCode.IF_ICMPGT => OperationCode.IF_ICMPLE,
+            OperationCode.IF_ICMPLE => OperationCode.IF_ICMPGT,
+            OperationCode.IF_ACMPEQ => OperationCode.IF_ACMPNE,
+            OperationCode.IF_ACMPNE => OperationCode.IF_ACMPEQ,
+            OperationCode.IFNULL => OperationCode.IFNONNULL,
+            OperationCode.IFNONNULL => OperationCode.IFNULL,
+            _ => op
+        };
     }
 
     public static MethodBody FromCodeAttribute(CodeAttribute attr, CpInfo[] constantPool)
@@ -486,7 +577,7 @@ public class MethodBody
                     var index = ReadUInt16(code, pc);
                     pc += 2;
                     pc += 2; // skip zero bytes
-                    var insn = new InvokeDynamicInstruction(index);
+                    var insn = ResolveInvokeDynamic(constantPool, index);
                     body.Instructions.Add(insn);
                     break;
                 }

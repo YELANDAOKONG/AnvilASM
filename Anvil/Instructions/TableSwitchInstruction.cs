@@ -24,8 +24,9 @@ public class TableSwitchInstruction : Instruction
 
     public override int GetSize()
     {
-        var baseSize = 1 + ((4 - (Offset!.Value + 1) % 4) % 4);
-        return baseSize + 12 + Targets.Count * 4;
+        var pc = Offset ?? 0;
+        var padding = (4 - (pc + 1) % 4) % 4;
+        return 1 + padding + 12 + Targets.Count * 4;
     }
 
     public override void Write(Stream stream)

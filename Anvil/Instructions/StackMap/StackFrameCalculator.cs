@@ -1,3 +1,4 @@
+using Anvil.Descriptors;
 using Anvil.Instructions;
 using Anvil.Instructions.ConstantPool;
 using Anvil.Structures.Attributes;
@@ -24,6 +25,11 @@ public class StackFrameCalculator
 
     public StackMapTableAttribute Compute()
     {
+        if (_body.Instructions.Any(insn => insn.Offset == null))
+        {
+            _body.ResolveLabels();
+        }
+
         var targets = ComputeTargets();
         var worklist = new Queue<int>();
         var iteration = 0;
@@ -34,8 +40,9 @@ public class StackFrameCalculator
 
         foreach (var block in _body.TryCatchBlocks)
         {
-            var handlerState = new FrameState();
+            var handlerState = _initial.Clone();
             var catchType = block.CatchType ?? "java/lang/Throwable";
+            handlerState.Stack.Clear();
             handlerState.Stack.Add(new JvmObject(catchType));
             SetFrame(block.Handler.Offset!.Value, handlerState);
             worklist.Enqueue(block.Handler.Offset!.Value);
@@ -223,19 +230,47 @@ public class StackFrameCalculator
             // Stores
             case OperationCode.ISTORE:
             case >= OperationCode.ISTORE_0 and <= OperationCode.ISTORE_3:
-                return state.Pop();
+            {
+                var idx = GetStoreVarIndex(insn);
+                state.Pop();
+                state.SetLocal(idx, JvmType.Int);
+                return Effect.Continue;
+            }
             case OperationCode.LSTORE:
             case >= OperationCode.LSTORE_0 and <= OperationCode.LSTORE_3:
-                return state.PopWide();
+            {
+                var idx = GetStoreVarIndex(insn);
+                state.PopWide();
+                state.SetLocal(idx, JvmType.Long);
+                state.SetLocal(idx + 1, JvmType.Top);
+                return Effect.Continue;
+            }
             case OperationCode.FSTORE:
             case >= OperationCode.FSTORE_0 and <= OperationCode.FSTORE_3:
-                return state.Pop();
+            {
+                var idx = GetStoreVarIndex(insn);
+                state.Pop();
+                state.SetLocal(idx, JvmType.Float);
+                return Effect.Continue;
+            }
             case OperationCode.DSTORE:
             case >= OperationCode.DSTORE_0 and <= OperationCode.DSTORE_3:
-                return state.PopWide();
+            {
+                var idx = GetStoreVarIndex(insn);
+                state.PopWide();
+                state.SetLocal(idx, JvmType.Double);
+                state.SetLocal(idx + 1, JvmType.Top);
+                return Effect.Continue;
+            }
             case OperationCode.ASTORE:
             case >= OperationCode.ASTORE_0 and <= OperationCode.ASTORE_3:
-                return state.Pop();
+            {
+                var idx = GetStoreVarIndex(insn);
+                var stackType = state.Stack.Count > 0 ? state.Stack[^1] : JvmType.Top;
+                state.Pop();
+                state.SetLocal(idx, stackType);
+                return Effect.Continue;
+            }
 
             // Array stores
             case OperationCode.IASTORE:
@@ -258,16 +293,21 @@ public class StackFrameCalculator
                 if (state.Stack.Count == 0) return Effect.Continue;
                 return state.Push(state.Stack[^1]);
             case OperationCode.DUP_X1:
-                return state.Stack.Count >= 2 ? Effect.Continue : Effect.Continue;
+                return ApplyDupX1(state);
             case OperationCode.DUP_X2:
-                return state.Stack.Count >= 3 ? Effect.Continue : Effect.Continue;
+                return ApplyDupX2(state);
             case OperationCode.DUP2:
-                return Effect.Continue;
+                return ApplyDup2(state);
             case OperationCode.DUP2_X1:
-                return Effect.Continue;
+                return ApplyDup2X1(state);
             case OperationCode.DUP2_X2:
-                return Effect.Continue;
+                return ApplyDup2X2(state);
             case OperationCode.SWAP:
+                if (state.Stack.Count < 2) return Effect.Continue;
+                var top = state.Stack[^1]; state.Stack.RemoveAt(state.Stack.Count - 1);
+                var second = state.Stack[^1]; state.Stack.RemoveAt(state.Stack.Count - 1);
+                state.Stack.Add(top);
+                state.Stack.Add(second);
                 return Effect.Continue;
 
             // Arithmetic
@@ -385,13 +425,16 @@ public class StackFrameCalculator
             // Object/Array
             case OperationCode.NEW:
             {
-                var ti = (TypeInstruction)insn;
                 return state.Push(new JvmUninitialized(insn.Offset!.Value));
             }
             case OperationCode.NEWARRAY:
                 return state.Pop() && state.Push(new JvmObject("[I"));
             case OperationCode.ANEWARRAY:
-                return state.Pop() && state.Push(new JvmObject("[Ljava/lang/Object;"));
+            {
+                var ti = (TypeInstruction)insn;
+                var arrayType = ti.Type != null ? $"[L{ti.Type};" : "[Ljava/lang/Object;";
+                return state.Pop() && state.Push(new JvmObject(arrayType));
+            }
             case OperationCode.ARRAYLENGTH:
                 return state.Pop() && state.Push(JvmType.Int);
             case OperationCode.ATHROW:
@@ -414,6 +457,193 @@ public class StackFrameCalculator
         }
     }
 
+    private static Effect ApplyDupX1(FrameState state)
+    {
+        if (state.Stack.Count < 2) return Effect.Continue;
+        var v1 = PopLast(state);
+        var v2 = PopLast(state);
+        state.Stack.Add(v1);
+        state.Stack.Add(v2);
+        state.Stack.Add(v1);
+        return Effect.Continue;
+    }
+
+    private static Effect ApplyDupX2(FrameState state)
+    {
+        if (state.Stack.Count >= 2 && IsStackTopWide(state))
+        {
+            var v1w = PopLast(state);
+            var v2w = PopLast(state);
+            state.Stack.Add(v1w);
+            state.Stack.Add(v2w);
+            state.Stack.Add(v1w);
+            return Effect.Continue;
+        }
+
+        if (state.Stack.Count >= 3)
+        {
+            var v1 = PopLast(state);
+            var v2 = PopLast(state);
+            var v3 = PopLast(state);
+            state.Stack.Add(v1);
+            state.Stack.Add(v3);
+            state.Stack.Add(v2);
+            state.Stack.Add(v1);
+        }
+
+        return Effect.Continue;
+    }
+
+    private static Effect ApplyDup2(FrameState state)
+    {
+        if (state.Stack.Count >= 1 && IsStackTopWide(state))
+        {
+            var v1 = PopLast(state);
+            var v2 = PopLast(state);
+            state.Stack.Add(v2);
+            state.Stack.Add(v1);
+            state.Stack.Add(v2);
+            state.Stack.Add(v1);
+            return Effect.Continue;
+        }
+
+        if (state.Stack.Count >= 2)
+        {
+            var v2 = PopLast(state);
+            var v1 = PopLast(state);
+            state.Stack.Add(v1);
+            state.Stack.Add(v2);
+            state.Stack.Add(v1);
+            state.Stack.Add(v2);
+        }
+
+        return Effect.Continue;
+    }
+
+    private static Effect ApplyDup2X1(FrameState state)
+    {
+        if (state.Stack.Count >= 1 && IsStackTopWide(state))
+        {
+            if (state.Stack.Count < 3) return Effect.Continue;
+            var v1 = PopLast(state);
+            var v2 = PopLast(state);
+            var v3 = PopLast(state);
+            state.Stack.Add(v2);
+            state.Stack.Add(v1);
+            state.Stack.Add(v3);
+            state.Stack.Add(v2);
+            state.Stack.Add(v1);
+            return Effect.Continue;
+        }
+
+        if (state.Stack.Count >= 3)
+        {
+            var v2 = PopLast(state);
+            var v1 = PopLast(state);
+            var v3 = PopLast(state);
+            state.Stack.Add(v1);
+            state.Stack.Add(v2);
+            state.Stack.Add(v3);
+            state.Stack.Add(v1);
+            state.Stack.Add(v2);
+        }
+
+        return Effect.Continue;
+    }
+
+    private static Effect ApplyDup2X2(FrameState state)
+    {
+        if (state.Stack.Count >= 1 && IsStackTopWide(state))
+        {
+            if (state.Stack.Count < 3) return Effect.Continue;
+            if (state.Stack.Count >= 3 && IsSecondStackTopWide(state))
+            {
+                var v1 = PopLast(state);
+                var v2 = PopLast(state);
+                var v3 = PopLast(state);
+                var v4 = PopLast(state);
+                state.Stack.Add(v2);
+                state.Stack.Add(v1);
+                state.Stack.Add(v4);
+                state.Stack.Add(v3);
+                state.Stack.Add(v2);
+                state.Stack.Add(v1);
+                return Effect.Continue;
+            }
+
+            var v1a = PopLast(state);
+            var v2a = PopLast(state);
+            var v3a = PopLast(state);
+            state.Stack.Add(v2a);
+            state.Stack.Add(v1a);
+            state.Stack.Add(v3a);
+            state.Stack.Add(v2a);
+            state.Stack.Add(v1a);
+            return Effect.Continue;
+        }
+
+        if (state.Stack.Count >= 3 && IsStackTopWideAtDepth(state, 3))
+        {
+            if (state.Stack.Count < 4) return Effect.Continue;
+            var v1 = PopLast(state);
+            var v2 = PopLast(state);
+            var v3 = PopLast(state);
+            var v4 = PopLast(state);
+            state.Stack.Add(v1);
+            state.Stack.Add(v2);
+            state.Stack.Add(v4);
+            state.Stack.Add(v3);
+            state.Stack.Add(v1);
+            state.Stack.Add(v2);
+            return Effect.Continue;
+        }
+
+        if (state.Stack.Count >= 4)
+        {
+            var v2 = PopLast(state);
+            var v1 = PopLast(state);
+            var v4 = PopLast(state);
+            var v3 = PopLast(state);
+            state.Stack.Add(v1);
+            state.Stack.Add(v2);
+            state.Stack.Add(v3);
+            state.Stack.Add(v4);
+            state.Stack.Add(v1);
+            state.Stack.Add(v2);
+        }
+
+        return Effect.Continue;
+    }
+
+    private static JvmType PopLast(FrameState state)
+    {
+        var v = state.Stack[^1];
+        state.Stack.RemoveAt(state.Stack.Count - 1);
+        return v;
+    }
+
+    private static bool IsStackTopWide(FrameState state)
+    {
+        return state.Stack.Count >= 2
+            && state.Stack[^2] is { Kind: JvmKind.Long or JvmKind.Double }
+            && state.Stack[^1].Kind == JvmKind.Top;
+    }
+
+    private static bool IsSecondStackTopWide(FrameState state)
+    {
+        return state.Stack.Count >= 4
+            && state.Stack[^4] is { Kind: JvmKind.Long or JvmKind.Double }
+            && state.Stack[^3].Kind == JvmKind.Top;
+    }
+
+    private static bool IsStackTopWideAtDepth(FrameState state, int depth)
+    {
+        var baseIndex = state.Stack.Count - depth;
+        return baseIndex >= 1
+            && state.Stack[baseIndex - 1] is { Kind: JvmKind.Long or JvmKind.Double }
+            && state.Stack[baseIndex].Kind == JvmKind.Top;
+    }
+
     private static JvmType FieldTypeToJvm(string? descriptor)
     {
         if (descriptor == null) return JvmType.Top;
@@ -429,51 +659,35 @@ public class StackFrameCalculator
 
     private static void PopArgs(FrameState state, string descriptor)
     {
-        var idx = descriptor.IndexOf(')');
-        var paramDesc = descriptor[1..idx];
-        var pos = 0;
-        while (pos < paramDesc.Length)
+        var methodDesc = DescriptorParser.ParseMethod(descriptor);
+        for (var i = methodDesc.Parameters.Length - 1; i >= 0; i--)
         {
-            var ch = paramDesc[pos];
-            switch (ch)
+            var param = methodDesc.Parameters[i];
+            if (param.Tag == DescriptorTag.Long || param.Tag == DescriptorTag.Double)
             {
-                case 'B': case 'C': case 'S': case 'I': case 'Z': case 'F':
-                    state.Pop();
-                    break;
-                case 'J': case 'D':
-                    state.PopWide();
-                    break;
-                case 'L':
-                    pos = paramDesc.IndexOf(';', pos);
-                    state.Pop();
-                    break;
-                case '[':
-                {
-                    var end = pos + 1;
-                    while (end < paramDesc.Length && paramDesc[end] == '[') end++;
-                    if (end < paramDesc.Length && paramDesc[end] == 'L') end = paramDesc.IndexOf(';', end);
-                    pos = end;
-                    state.Pop();
-                    break;
-                }
+                state.PopWide();
             }
-
-            pos++;
+            else
+            {
+                state.Pop();
+            }
         }
     }
 
     private static Effect PushReturn(FrameState state, string descriptor)
     {
-        var retType = descriptor[(descriptor.IndexOf(')') + 1)..];
-        switch (retType)
+        var methodDesc = DescriptorParser.ParseMethod(descriptor);
+        var retType = methodDesc.ReturnType;
+
+        if (retType.Tag == DescriptorTag.Void) return Effect.Continue;
+
+        var jvmType = TypeDescriptorToJvm(retType);
+        if (retType.Tag == DescriptorTag.Long || retType.Tag == DescriptorTag.Double)
         {
-            case "V": return Effect.Continue;
-            case "J": return state.PushWide(JvmType.Long);
-            case "D": return state.PushWide(JvmType.Double);
-            case "F": return state.Push(JvmType.Float);
-            case "I": case "Z": case "B": case "C": case "S": return state.Push(JvmType.Int);
-            default: return state.Push(JvmType.Top);
+            return state.PushWide(jvmType);
         }
+
+        return state.Push(jvmType);
     }
 
     private static bool IsWideDesc(string? desc)
@@ -492,62 +706,62 @@ public class StackFrameCalculator
         return 0;
     }
 
+    private static int GetStoreVarIndex(Instruction insn)
+    {
+        if (insn is VarInstruction v) return v.VarIndex;
+        if (insn.OpCode >= OperationCode.ISTORE_0 && insn.OpCode <= OperationCode.ISTORE_3) return insn.OpCode - OperationCode.ISTORE_0;
+        if (insn.OpCode >= OperationCode.LSTORE_0 && insn.OpCode <= OperationCode.LSTORE_3) return insn.OpCode - OperationCode.LSTORE_0;
+        if (insn.OpCode >= OperationCode.FSTORE_0 && insn.OpCode <= OperationCode.FSTORE_3) return insn.OpCode - OperationCode.FSTORE_0;
+        if (insn.OpCode >= OperationCode.DSTORE_0 && insn.OpCode <= OperationCode.DSTORE_3) return insn.OpCode - OperationCode.DSTORE_0;
+        if (insn.OpCode >= OperationCode.ASTORE_0 && insn.OpCode <= OperationCode.ASTORE_3) return insn.OpCode - OperationCode.ASTORE_0;
+        return 0;
+    }
+
     private static FrameState InitLocals(string descriptor, bool isStatic)
     {
         var state = new FrameState();
-        var offset = 0;
+        var methodDesc = DescriptorParser.ParseMethod(descriptor);
 
         if (!isStatic)
         {
             state.Locals.Add(new JvmUninitializedThis());
-            offset = 1;
         }
 
-        var paramDesc = descriptor[1..descriptor.IndexOf(')')];
-        var pos = 0;
-        while (pos < paramDesc.Length)
+        foreach (var param in methodDesc.Parameters)
         {
-            var ch = paramDesc[pos];
-            switch (ch)
-            {
-                case 'B': case 'C': case 'S': case 'I': case 'Z':
-                    state.Locals.Add(JvmType.Int);
-                    break;
-                case 'F':
-                    state.Locals.Add(JvmType.Float);
-                    break;
-                case 'J':
-                    state.Locals.Add(JvmType.Long);
-                    state.Locals.Add(JvmType.Top);
-                    break;
-                case 'D':
-                    state.Locals.Add(JvmType.Double);
-                    state.Locals.Add(JvmType.Top);
-                    break;
-                case 'L':
-                {
-                    var end = paramDesc.IndexOf(';', pos);
-                    var typeName = paramDesc[(pos + 1)..end];
-                    state.Locals.Add(new JvmObject(typeName));
-                    pos = end;
-                    break;
-                }
-                case '[':
-                {
-                    var end = pos + 1;
-                    while (end < paramDesc.Length && paramDesc[end] == '[') end++;
-                    if (end < paramDesc.Length && paramDesc[end] == 'L') end = paramDesc.IndexOf(';', end);
-                    var typeName = paramDesc[pos..(end + 1)];
-                    state.Locals.Add(new JvmObject(typeName));
-                    pos = end;
-                    break;
-                }
-            }
+            var type = TypeDescriptorToJvm(param);
+            state.Locals.Add(type);
 
-            pos++;
+            if (param.Tag == DescriptorTag.Long || param.Tag == DescriptorTag.Double)
+            {
+                state.Locals.Add(JvmType.Top);
+            }
         }
 
         return state;
+    }
+
+    private static JvmType TypeDescriptorToJvm(TypeDescriptor td)
+    {
+        if (td.IsArray)
+        {
+            return new JvmObject(td.ToString());
+        }
+
+        if (td.IsObject)
+        {
+            return new JvmObject(td.InternalName!);
+        }
+
+        return td.Tag switch
+        {
+            DescriptorTag.Boolean or DescriptorTag.Byte or DescriptorTag.Char
+                or DescriptorTag.Int or DescriptorTag.Short => JvmType.Int,
+            DescriptorTag.Float => JvmType.Float,
+            DescriptorTag.Long => JvmType.Long,
+            DescriptorTag.Double => JvmType.Double,
+            _ => JvmType.Top
+        };
     }
 
     private void SetFrame(int pc, FrameState state)
@@ -560,8 +774,17 @@ public class StackFrameCalculator
 
     private static bool MergeInto(FrameState target, FrameState source)
     {
-        if (target.Locals.Count != source.Locals.Count) return false;
         if (target.Stack.Count != source.Stack.Count) return false;
+
+        while (target.Locals.Count < source.Locals.Count)
+        {
+            target.Locals.Add(JvmType.Top);
+        }
+
+        while (source.Locals.Count < target.Locals.Count)
+        {
+            source.Locals.Add(JvmType.Top);
+        }
 
         var changed = false;
         for (var i = 0; i < target.Locals.Count; i++)

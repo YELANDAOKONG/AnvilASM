@@ -1,12 +1,37 @@
+using Anvil.Instructions.ConstantPool;
+
 namespace Anvil.Instructions;
 
 public class InvokeDynamicInstruction : Instruction
 {
     public int BootstrapMethodAttrIndex { get; set; }
+    public string? Name { get; set; }
+    public string? Descriptor { get; set; }
+
+    private bool _resolved;
 
     public InvokeDynamicInstruction(int bootstrapMethodAttrIndex) : base(OperationCode.INVOKEDYNAMIC)
     {
         BootstrapMethodAttrIndex = bootstrapMethodAttrIndex;
+        _resolved = true;
+    }
+
+    public InvokeDynamicInstruction(int bootstrapMethodAttrIndex, string name, string descriptor) : base(OperationCode.INVOKEDYNAMIC)
+    {
+        BootstrapMethodAttrIndex = bootstrapMethodAttrIndex;
+        Name = name;
+        Descriptor = descriptor;
+    }
+
+    internal void Resolve(ConstantPoolBuilder cp)
+    {
+        if (_resolved)
+        {
+            return;
+        }
+
+        BootstrapMethodAttrIndex = cp.AddInvokeDynamic(BootstrapMethodAttrIndex, Name!, Descriptor!);
+        _resolved = true;
     }
 
     public override int GetSize() => 5;

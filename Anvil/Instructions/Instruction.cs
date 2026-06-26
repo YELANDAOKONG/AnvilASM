@@ -2,7 +2,7 @@ namespace Anvil.Instructions;
 
 public abstract class Instruction
 {
-    public OperationCode OpCode { get; protected set; }
+    public OperationCode OpCode { get; internal set; }
 
     public List<Label> Labels { get; } = [];
 

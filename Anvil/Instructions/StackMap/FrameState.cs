@@ -55,4 +55,14 @@ internal class FrameState
     {
         return PopN(4);
     }
+
+    public void SetLocal(int index, JvmType type)
+    {
+        while (Locals.Count <= index)
+        {
+            Locals.Add(JvmType.Top);
+        }
+
+        Locals[index] = type;
+    }
 }

@@ -1,4 +1,5 @@
 using Anvil.Factories;
+using Anvil.Instructions.ConstantPool;
 using Anvil.Interfaces;
 using Anvil.Structures.ConstantPool;
 using Anvil.Types;
@@ -65,6 +66,19 @@ public class AttributeInfo : IStructure<AttributeInfo>
         }
 
         return AttributeFactory.Create(utf8Name.Value, Info);
+    }
+
+    public static AttributeInfo CreateFromAttribute(string attributeName, IAttribute body, ConstantPoolBuilder cp)
+    {
+        using var ms = new MemoryStream();
+        body.Write(ms);
+        var info = ms.ToArray();
+
+        return new AttributeInfo
+        {
+            AttributeNameIndex = new TUShort((ushort)cp.AddUtf8(attributeName)),
+            Info = info
+        };
     }
 
 }

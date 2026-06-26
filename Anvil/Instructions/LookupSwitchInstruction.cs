@@ -18,8 +18,9 @@ public class LookupSwitchInstruction : Instruction
 
     public override int GetSize()
     {
-        var baseSize = 1 + ((4 - (Offset!.Value + 1) % 4) % 4);
-        return baseSize + 8 + Pairs.Count * 8;
+        var pc = Offset ?? 0;
+        var padding = (4 - (pc + 1) % 4) % 4;
+        return 1 + padding + 8 + Pairs.Count * 8;
     }
 
     public override void Write(Stream stream)
