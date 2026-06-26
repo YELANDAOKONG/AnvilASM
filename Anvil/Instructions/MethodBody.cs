@@ -271,7 +271,7 @@ public class MethodBody
         }
     }
 
-    private static InvokeDynamicInstruction ResolveInvokeDynamic(CpInfo[] constantPool, int index)
+    private static InvokeDynamicInstruction ResolveInvokeDynamic(CpInfo?[] constantPool, int index)
     {
         if (index <= 0 || index >= constantPool.Length)
         {
@@ -347,7 +347,7 @@ public class MethodBody
         };
     }
 
-    public static MethodBody FromCodeAttribute(CodeAttribute attr, CpInfo[] constantPool)
+    public static MethodBody FromCodeAttribute(CodeAttribute attr, CpInfo?[] constantPool)
     {
         var body = new MethodBody
         {
@@ -676,7 +676,7 @@ public class MethodBody
         return label;
     }
 
-    private static Instruction CreateLdcInstruction(CpInfo[] constantPool, int index, bool isWide2)
+    private static Instruction CreateLdcInstruction(CpInfo?[] constantPool, int index, bool isWide2)
     {
         if (index <= 0 || index >= constantPool.Length)
         {
@@ -709,7 +709,7 @@ public class MethodBody
         }
     }
 
-    private static string ResolveClassName(CpInfo[] constantPool, int classIndex)
+    private static string ResolveClassName(CpInfo?[] constantPool, int classIndex)
     {
         if (classIndex <= 0 || classIndex >= constantPool.Length)
         {
@@ -721,7 +721,7 @@ public class MethodBody
         return utf8.Value;
     }
 
-    private static (string Owner, string Name, string Descriptor) ResolveFieldRef(CpInfo[] constantPool, int index)
+    private static (string Owner, string Name, string Descriptor) ResolveFieldRef(CpInfo?[] constantPool, int index)
     {
         var fieldRef = (CpFieldRef)constantPool[index];
         var className = ResolveClassName(constantPool, fieldRef.ClassIndex.Value);
@@ -729,7 +729,7 @@ public class MethodBody
         return (className, name, descriptor);
     }
 
-    private static (string Owner, string Name, string Descriptor) ResolveMethodRef(CpInfo[] constantPool, int index)
+    private static (string Owner, string Name, string Descriptor) ResolveMethodRef(CpInfo?[] constantPool, int index)
     {
         var methodRef = (CpMethodRef)constantPool[index];
         var className = ResolveClassName(constantPool, methodRef.ClassIndex.Value);
@@ -737,7 +737,7 @@ public class MethodBody
         return (className, name, descriptor);
     }
 
-    private static (string Owner, string Name, string Descriptor) ResolveInterfaceMethodRef(CpInfo[] constantPool, int index)
+    private static (string Owner, string Name, string Descriptor) ResolveInterfaceMethodRef(CpInfo?[] constantPool, int index)
     {
         var methodRef = (CpInterfaceMethodRef)constantPool[index];
         var className = ResolveClassName(constantPool, methodRef.ClassIndex.Value);
@@ -745,7 +745,7 @@ public class MethodBody
         return (className, name, descriptor);
     }
 
-    private static (string Name, string Descriptor) ResolveNameAndType(CpInfo[] constantPool, int index)
+    private static (string Name, string Descriptor) ResolveNameAndType(CpInfo?[] constantPool, int index)
     {
         var nat = (CpNameAndType)constantPool[index];
         var name = ((CpUtf8)constantPool[nat.NameIndex.Value]).Value;
