@@ -1,3 +1,5 @@
+using Anvil.Instructions.ConstantPool;
+
 namespace Anvil.Instructions;
 
 public class TypeInstruction : Instruction

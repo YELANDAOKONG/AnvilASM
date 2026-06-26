@@ -3,7 +3,7 @@ using Anvil.Structures;
 using Anvil.Structures.ConstantPool;
 using Anvil.Types;
 
-namespace Anvil.Instructions;
+namespace Anvil.Instructions.ConstantPool;
 
 public class ConstantPoolBuilder
 {

@@ -1,10 +1,12 @@
+using Anvil.Instructions;
+using Anvil.Instructions.ConstantPool;
 using Anvil.Structures.Attributes;
 using Anvil.Structures.Attributes.StackMap;
 using Anvil.Structures.Attributes.StackMap.Frames;
 using Anvil.Structures.Attributes.StackMap.Types;
 using Anvil.Types;
 
-namespace Anvil.Instructions;
+namespace Anvil.Instructions.StackMap;
 
 public class StackFrameCalculator
 {
@@ -646,111 +648,3 @@ public class StackFrameCalculator
     }
 }
 
-// ── Internal type system ──
-
-internal enum JvmKind { Int, Float, Long, Double, Top, Null, UninitializedThis, Object, Uninitialized }
-
-internal class JvmType
-{
-    public JvmKind Kind { get; }
-    public virtual string? TypeName => null;
-    public virtual int NewOffset => -1;
-
-    protected JvmType(JvmKind kind) => Kind = kind;
-
-    public static readonly JvmType Int = new(JvmKind.Int);
-    public static readonly JvmType Float = new(JvmKind.Float);
-    public static readonly JvmType Long = new(JvmKind.Long);
-    public static readonly JvmType Double = new(JvmKind.Double);
-    public static readonly JvmType Top = new(JvmKind.Top);
-    public static readonly JvmType Null = new(JvmKind.Null);
-}
-
-internal class JvmObject : JvmType
-{
-    public override string TypeName { get; }
-
-    public JvmObject(string typeName) : base(JvmKind.Object)
-    {
-        TypeName = typeName;
-    }
-
-    public override bool Equals(object? obj) =>
-        obj is JvmObject other && other.TypeName == TypeName;
-
-    public override int GetHashCode() => TypeName.GetHashCode();
-}
-
-internal class JvmUninitialized : JvmType
-{
-    public override int NewOffset { get; }
-
-    public JvmUninitialized(int newOffset) : base(JvmKind.Uninitialized)
-    {
-        NewOffset = newOffset;
-    }
-
-    public override bool Equals(object? obj) =>
-        obj is JvmUninitialized other && other.NewOffset == NewOffset;
-
-    public override int GetHashCode() => NewOffset.GetHashCode();
-}
-
-internal class JvmUninitializedThis : JvmType
-{
-    public JvmUninitializedThis() : base(JvmKind.UninitializedThis) { }
-
-    public override bool Equals(object? obj) => obj is JvmUninitializedThis;
-    public override int GetHashCode() => 0xCAFE;
-}
-
-// ── Frame state ──
-
-internal class FrameState
-{
-    public List<JvmType> Locals { get; } = new();
-    public List<JvmType> Stack { get; } = new();
-
-    public FrameState Clone()
-    {
-        var clone = new FrameState();
-        clone.Locals.AddRange(Locals);
-        clone.Stack.AddRange(Stack);
-        return clone;
-    }
-
-    public Effect Push(JvmType type) { Stack.Add(type); return Effect.Continue; }
-
-    public Effect PushWide(JvmType type) { Stack.Add(type); Stack.Add(JvmType.Top); return Effect.Continue; }
-
-    public Effect Pop()
-    {
-        if (Stack.Count > 0) Stack.RemoveAt(Stack.Count - 1);
-        return Effect.Continue;
-    }
-
-    public Effect PopN(int n)
-    {
-        for (var i = 0; i < n && Stack.Count > 0; i++) Stack.RemoveAt(Stack.Count - 1);
-        return Effect.Continue;
-    }
-
-    public Effect PopWide() { return PopN(2); }
-
-    public Effect PopWide2() { return PopN(4); }
-}
-
-internal struct Effect
-{
-    public bool KeepGoing { get; }
-    public static Effect Continue => new(true);
-    public static Effect Stop => new(false);
-
-    private Effect(bool cont) => KeepGoing = cont;
-
-    public static implicit operator Effect(bool value) => new(value);
-
-    public static Effect operator &(Effect a, Effect b) => a.KeepGoing && b.KeepGoing ? Continue : Stop;
-    public static bool operator true(Effect e) => e.KeepGoing;
-    public static bool operator false(Effect e) => !e.KeepGoing;
-}

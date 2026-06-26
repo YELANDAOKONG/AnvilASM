@@ -1,3 +1,4 @@
+using Anvil.Instructions.ConstantPool;
 using Anvil.Structures;
 using Anvil.Structures.Attributes;
 using Anvil.Structures.Attributes.Code;
@@ -238,6 +239,21 @@ public class MethodBody
                     break;
             }
         }
+    }
+
+    private int GetLabelOffset(Label label)
+    {
+        if (_labelOffsets.TryGetValue(label, out var offset))
+        {
+            return offset;
+        }
+
+        if (label.Offset.HasValue)
+        {
+            return label.Offset.Value;
+        }
+
+        throw new InvalidOperationException($"Label '{label}' has not been resolved.");
     }
 
     public static MethodBody FromCodeAttribute(CodeAttribute attr, CpInfo[] constantPool)
@@ -659,20 +675,5 @@ public class MethodBody
     private static int ReadInt32(byte[] data, int offset)
     {
         return (data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3];
-    }
-
-    private int GetLabelOffset(Label label)
-    {
-        if (_labelOffsets.TryGetValue(label, out var offset))
-        {
-            return offset;
-        }
-
-        if (label.Offset.HasValue)
-        {
-            return label.Offset.Value;
-        }
-
-        throw new InvalidOperationException($"Label '{label}' has not been resolved.");
     }
 }
