@@ -671,7 +671,7 @@ public class MethodBody
             return label;
         }
 
-        label = new Label();
+        label = new Label { Offset = pc };
         map[pc] = label;
         return label;
     }
