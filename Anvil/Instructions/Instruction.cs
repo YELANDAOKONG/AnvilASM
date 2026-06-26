@@ -6,7 +6,7 @@ public abstract class Instruction
 
     public List<Label> Labels { get; } = [];
 
-    internal int? Offset { get; set; }
+    public int? Offset { get; set; }
 
     protected Instruction(OperationCode opCode)
     {

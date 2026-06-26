@@ -2,13 +2,35 @@ namespace Anvil.Instructions;
 
 public class MultiANewArrayInstruction : Instruction
 {
-    public int TypeIndex { get; set; }
+    public string? Type { get; set; }
     public int Dimensions { get; set; }
+
+    public int TypeIndex { get; set; }
+
+    private bool _resolved;
+
+    public MultiANewArrayInstruction(string type, int dimensions) : base(OperationCode.MULTIANEWARRAY)
+    {
+        Type = type;
+        Dimensions = dimensions;
+    }
 
     public MultiANewArrayInstruction(int typeIndex, int dimensions) : base(OperationCode.MULTIANEWARRAY)
     {
         TypeIndex = typeIndex;
         Dimensions = dimensions;
+        _resolved = true;
+    }
+
+    internal void Resolve(ConstantPoolBuilder cp)
+    {
+        if (_resolved)
+        {
+            return;
+        }
+
+        TypeIndex = cp.AddClass(Type!);
+        _resolved = true;
     }
 
     public override int GetSize() => 4;
@@ -21,5 +43,13 @@ public class MultiANewArrayInstruction : Instruction
         stream.WriteByte((byte)Dimensions);
     }
 
-    public override string ToString() => $"{OpCode} #{TypeIndex} {Dimensions}";
+    public override string ToString()
+    {
+        if (Type != null)
+        {
+            return $"{OpCode} {Type} dims={Dimensions}";
+        }
+
+        return $"{OpCode} #{TypeIndex} {Dimensions}";
+    }
 }

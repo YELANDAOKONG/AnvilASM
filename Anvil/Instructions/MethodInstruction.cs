@@ -2,22 +2,50 @@ namespace Anvil.Instructions;
 
 public class MethodInstruction : Instruction
 {
-    public int MethodRefIndex { get; set; }
+    public string? Owner { get; set; }
+    public string? Name { get; set; }
+    public string? Descriptor { get; set; }
 
-    /// <summary>
-    /// For INVOKEINTERFACE only: number of argument slots consumed by the method's parameters.
-    /// Must be &gt; 0. Long and double parameters count as two slots each.
-    /// </summary>
     public int Count { get; set; }
 
-    public MethodInstruction(OperationCode opCode, int methodRefIndex) : base(opCode)
+    public int MethodRefIndex { get; set; }
+
+    private bool _resolved;
+
+    public MethodInstruction(OperationCode opCode, string owner, string name, string descriptor) : base(opCode)
     {
-        MethodRefIndex = methodRefIndex;
+        Owner = owner;
+        Name = name;
+        Descriptor = descriptor;
 
         if (opCode == OperationCode.INVOKEINTERFACE)
         {
             Count = 1;
         }
+    }
+
+    public MethodInstruction(OperationCode opCode, int methodRefIndex) : base(opCode)
+    {
+        MethodRefIndex = methodRefIndex;
+        _resolved = true;
+
+        if (opCode == OperationCode.INVOKEINTERFACE)
+        {
+            Count = 1;
+        }
+    }
+
+    internal void Resolve(ConstantPoolBuilder cp)
+    {
+        if (_resolved)
+        {
+            return;
+        }
+
+        MethodRefIndex = OpCode == OperationCode.INVOKEINTERFACE
+            ? cp.AddInterfaceMethodRef(Owner!, Name!, Descriptor!)
+            : cp.AddMethodRef(Owner!, Name!, Descriptor!);
+        _resolved = true;
     }
 
     public override int GetSize() => OpCode switch
@@ -39,5 +67,13 @@ public class MethodInstruction : Instruction
         }
     }
 
-    public override string ToString() => $"{OpCode} #{MethodRefIndex}";
+    public override string ToString()
+    {
+        if (Owner != null)
+        {
+            return $"{OpCode} {Owner}.{Name} {Descriptor}";
+        }
+
+        return $"{OpCode} #{MethodRefIndex}";
+    }
 }
