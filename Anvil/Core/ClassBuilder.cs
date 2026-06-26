@@ -23,9 +23,24 @@ public class MethodEntry
     }
 }
 
+public class FieldEntry
+{
+    public FieldInfo Info { get; }
+    public string Name { get; }
+    public string Descriptor { get; }
+
+    internal FieldEntry(FieldInfo info, string name, string descriptor)
+    {
+        Info = info;
+        Name = name;
+        Descriptor = descriptor;
+    }
+}
+
 public class ClassBuilder
 {
     public ClassFile ClassFile { get; private set; }
+    private readonly List<FieldEntry> _fields = [];
     private readonly List<MethodEntry> _methods = [];
 
     private ClassBuilder(ClassFile classFile)
@@ -33,12 +48,70 @@ public class ClassBuilder
         ClassFile = classFile;
     }
 
+    public IReadOnlyList<FieldEntry> Fields => _fields;
     public IReadOnlyList<MethodEntry> Methods => _methods;
+
+    public static ClassBuilder Create(int majorVersion = 65, int minorVersion = 0)
+    {
+        var classFile = new ClassFile
+        {
+            Magic = new TUInt(ClassFile.MagicNumber),
+            MinorVersion = new TUShort((ushort)minorVersion),
+            MajorVersion = new TUShort((ushort)majorVersion),
+            ConstantPoolCount = new TUShort(1),
+            ConstantPool = new CpInfo?[1],
+            AccessFlags = Constants.Flags.ClassAccessFlags.Public,
+            ThisClass = new TUShort(0),
+            SuperClass = new TUShort(0)
+        };
+        return new ClassBuilder(classFile);
+    }
+
+    public FieldEntry AddField(string name, string descriptor, Constants.Flags.FieldAccessFlags accessFlags)
+    {
+        var info = new FieldInfo
+        {
+            AccessFlags = accessFlags,
+            NameIndex = new TUShort(0),
+            DescriptorIndex = new TUShort(0),
+            AttributesCount = new TUShort(0),
+            Attributes = Array.Empty<AttributeInfo>()
+        };
+        var entry = new FieldEntry(info, name, descriptor);
+        _fields.Add(entry);
+        return entry;
+    }
+
+    public void RemoveField(FieldEntry field) => _fields.Remove(field);
+
+    public MethodEntry AddMethod(string name, string descriptor, Constants.Flags.MethodAccessFlags accessFlags)
+    {
+        var info = new MethodInfo
+        {
+            AccessFlags = accessFlags,
+            NameIndex = new TUShort(0),
+            DescriptorIndex = new TUShort(0),
+            AttributesCount = new TUShort(0),
+            Attributes = Array.Empty<AttributeInfo>()
+        };
+        var entry = new MethodEntry(info, name, descriptor, null);
+        _methods.Add(entry);
+        return entry;
+    }
+
+    public void RemoveMethod(MethodEntry method) => _methods.Remove(method);
 
     public static ClassBuilder Read(Stream stream)
     {
         var classFile = ClassFile.Read(stream);
         var builder = new ClassBuilder(classFile);
+
+        foreach (var field in classFile.Fields)
+        {
+            var (name, descriptor) = ResolveMethodNameAndDescriptor(
+                classFile.ConstantPool, field.NameIndex.Value, field.DescriptorIndex.Value);
+            builder._fields.Add(new FieldEntry(field, name, descriptor));
+        }
 
         foreach (var method in classFile.Methods)
         {
@@ -94,9 +167,15 @@ public class ClassBuilder
             }
         }
 
-        foreach (var field in ClassFile.Fields)
+        ClassFile.Fields = _fields.Select(f => f.Info).ToArray();
+        ClassFile.FieldsCount = new TUShort((ushort)ClassFile.Fields.Length);
+
+        ClassFile.Methods = _methods.Select(m => m.Info).ToArray();
+        ClassFile.MethodsCount = new TUShort((ushort)ClassFile.Methods.Length);
+
+        foreach (var entry in _fields)
         {
-            RemapFieldOrMethod(field, oldToNew);
+            RemapField(entry, cp, oldToNew);
         }
 
         foreach (var entry in _methods)
@@ -111,8 +190,8 @@ public class ClassBuilder
 
     private static void RemapMethod(MethodEntry entry, ConstantPoolBuilder cp, Dictionary<int, int> oldToNew)
     {
-        entry.Info.NameIndex = new TUShort((ushort)oldToNew[entry.Info.NameIndex.Value]);
-        entry.Info.DescriptorIndex = new TUShort((ushort)oldToNew[entry.Info.DescriptorIndex.Value]);
+        entry.Info.NameIndex = new TUShort((ushort)cp.AddUtf8(entry.Name));
+        entry.Info.DescriptorIndex = new TUShort((ushort)cp.AddUtf8(entry.Descriptor));
 
         if (entry.Body != null)
         {
@@ -124,13 +203,15 @@ public class ClassBuilder
         {
             entry.Info.Attributes = RemapAttributes(entry.Info.Attributes, oldToNew);
         }
+        entry.Info.AttributesCount = new TUShort((ushort)entry.Info.Attributes.Length);
     }
 
-    private static void RemapFieldOrMethod(FieldInfo field, Dictionary<int, int> oldToNew)
+    private static void RemapField(FieldEntry entry, ConstantPoolBuilder cp, Dictionary<int, int> oldToNew)
     {
-        field.NameIndex = new TUShort((ushort)oldToNew[field.NameIndex.Value]);
-        field.DescriptorIndex = new TUShort((ushort)oldToNew[field.DescriptorIndex.Value]);
-        field.Attributes = RemapAttributes(field.Attributes, oldToNew);
+        entry.Info.NameIndex = new TUShort((ushort)cp.AddUtf8(entry.Name));
+        entry.Info.DescriptorIndex = new TUShort((ushort)cp.AddUtf8(entry.Descriptor));
+        entry.Info.Attributes = RemapAttributes(entry.Info.Attributes, oldToNew);
+        entry.Info.AttributesCount = new TUShort((ushort)entry.Info.Attributes.Length);
     }
 
     private static AttributeInfo[] RemapAttributes(AttributeInfo[] attributes, Dictionary<int, int> oldToNew)
@@ -243,10 +324,28 @@ public class ClassBuilder
             case CpMethodHandle mh:
                 return cp.AddMethodHandle(mh.ReferenceKind.Value, mh.ReferenceIndex.Value);
 
+            case CpDynamic dyn:
+            {
+                var (name, desc) = ResolveNat(pool, dyn.NameAndTypeIndex.Value);
+                return cp.AddDynamic(dyn.BootstrapMethodAttrIndex.Value, name, desc);
+            }
+
             case CpInvokeDynamic indy:
             {
                 var (name, desc) = ResolveNat(pool, indy.NameAndTypeIndex.Value);
                 return cp.AddInvokeDynamic(indy.BootstrapMethodAttrIndex.Value, name, desc);
+            }
+
+            case CpModule mod:
+            {
+                var name = ResolveUtf8(pool, mod.NameIndex.Value);
+                return cp.AddModule(name);
+            }
+
+            case CpPackage pkg:
+            {
+                var name = ResolveUtf8(pool, pkg.NameIndex.Value);
+                return cp.AddPackage(name);
             }
 
             default:

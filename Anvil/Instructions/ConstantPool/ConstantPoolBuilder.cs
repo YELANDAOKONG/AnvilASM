@@ -21,6 +21,8 @@ public class ConstantPoolBuilder
     private readonly Dictionary<(string Owner, string Name, string Descriptor), int> _methodRefMap = new();
     private readonly Dictionary<(string Owner, string Name, string Descriptor), int> _interfaceMethodRefMap = new();
     private readonly Dictionary<string, int> _methodTypeMap = new();
+    private readonly Dictionary<string, int> _moduleMap = new();
+    private readonly Dictionary<string, int> _packageMap = new();
 
     public int Count => _entries.Count;
 
@@ -233,6 +235,43 @@ public class ConstantPoolBuilder
             new TUShort((ushort)bootstrapMethodAttrIndex),
             new TUShort((ushort)nameAndTypeIndex));
         return Append(entry);
+    }
+
+    public int AddDynamic(int bootstrapMethodAttrIndex, string name, string descriptor)
+    {
+        var nameAndTypeIndex = AddNameAndType(name, descriptor);
+        var entry = new CpDynamic(
+            new TUShort((ushort)bootstrapMethodAttrIndex),
+            new TUShort((ushort)nameAndTypeIndex));
+        return Append(entry);
+    }
+
+    public int AddModule(string name)
+    {
+        if (_moduleMap.TryGetValue(name, out var index))
+        {
+            return index;
+        }
+
+        var nameIndex = AddUtf8(name);
+        var entry = new CpModule(new TUShort((ushort)nameIndex));
+        index = Append(entry);
+        _moduleMap[name] = index;
+        return index;
+    }
+
+    public int AddPackage(string name)
+    {
+        if (_packageMap.TryGetValue(name, out var index))
+        {
+            return index;
+        }
+
+        var nameIndex = AddUtf8(name);
+        var entry = new CpPackage(new TUShort((ushort)nameIndex));
+        index = Append(entry);
+        _packageMap[name] = index;
+        return index;
     }
 
     private int Append(CpInfo entry)
