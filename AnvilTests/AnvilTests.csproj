@@ -22,6 +22,10 @@
     </ItemGroup>
 
     <ItemGroup>
+      <EmbeddedResource Include="Resources\*.class" />
+    </ItemGroup>
+
+    <ItemGroup>
       <ProjectReference Include="..\Anvil\Anvil.csproj" />
     </ItemGroup>
 
