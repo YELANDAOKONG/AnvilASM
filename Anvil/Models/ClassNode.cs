@@ -11,8 +11,11 @@ public class ClassNode
     
     public string Name { get; set; } = string.Empty;
     public string SuperName { get; set; } = "java/lang/Object";
+    public string? Signature { get; set; }
+    public string? SourceFile { get; set; }
     
     public List<string> Interfaces { get; set; } = [];
     public List<FieldNode> Fields { get; set; } = [];
     public List<MethodNode> Methods { get; set; } = [];
+    public List<Anvil.Structures.AttributeInfo> Attributes { get; set; } = [];
 }

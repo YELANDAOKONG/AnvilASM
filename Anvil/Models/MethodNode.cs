@@ -8,7 +8,10 @@ public class MethodNode
     public MethodAccessFlags AccessFlags { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Descriptor { get; set; } = string.Empty;
+    public string? Signature { get; set; }
+    public List<string> Exceptions { get; set; } = [];
     public MethodBody? Body { get; set; }
+    public List<Anvil.Structures.AttributeInfo> Attributes { get; set; } = [];
 
     public MethodNode() { }
 

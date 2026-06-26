@@ -15,17 +15,31 @@ public static class ClassReader
             AccessFlags = builder.ClassFile.AccessFlags,
             Name = builder.Name,
             SuperName = builder.SuperName,
-            Interfaces = builder.Interfaces.ToList()
+            Signature = builder.Signature,
+            SourceFile = builder.SourceFile,
+            Interfaces = builder.Interfaces.ToList(),
+            Attributes = builder.Attributes.ToList()
         };
 
         foreach (var field in builder.Fields)
         {
-            node.Fields.Add(new FieldNode(field.Info.AccessFlags, field.Name, field.Descriptor));
+            var fn = new FieldNode(field.Info.AccessFlags, field.Name, field.Descriptor)
+            {
+                Signature = field.Signature,
+                Attributes = field.Attributes.ToList()
+            };
+            node.Fields.Add(fn);
         }
 
         foreach (var method in builder.Methods)
         {
-            node.Methods.Add(new MethodNode(method.Info.AccessFlags, method.Name, method.Descriptor, method.Body));
+            var mn = new MethodNode(method.Info.AccessFlags, method.Name, method.Descriptor, method.Body)
+            {
+                Signature = method.Signature,
+                Exceptions = method.Exceptions.ToList(),
+                Attributes = method.Attributes.ToList()
+            };
+            node.Methods.Add(mn);
         }
 
         return node;

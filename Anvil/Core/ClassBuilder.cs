@@ -12,7 +12,10 @@ public class MethodEntry
     public MethodInfo Info { get; }
     public string Name { get; }
     public string Descriptor { get; }
+    public string? Signature { get; set; }
+    public List<string> Exceptions { get; set; } = [];
     public MethodBody? Body { get; set; }
+    public List<AttributeInfo> Attributes { get; set; } = [];
 
     internal MethodEntry(MethodInfo info, string name, string descriptor, MethodBody? body)
     {
@@ -28,6 +31,8 @@ public class FieldEntry
     public FieldInfo Info { get; }
     public string Name { get; }
     public string Descriptor { get; }
+    public string? Signature { get; set; }
+    public List<AttributeInfo> Attributes { get; set; } = [];
 
     internal FieldEntry(FieldInfo info, string name, string descriptor)
     {
@@ -43,7 +48,10 @@ public class ClassBuilder
     
     public string Name { get; set; } = string.Empty;
     public string SuperName { get; set; } = string.Empty;
+    public string? Signature { get; set; }
+    public string? SourceFile { get; set; }
     public List<string> Interfaces { get; set; } = [];
+    public List<AttributeInfo> Attributes { get; set; } = [];
 
     private readonly List<FieldEntry> _fields = [];
     private readonly List<MethodEntry> _methods = [];
@@ -129,11 +137,32 @@ public class ClassBuilder
             }
         }
 
+        foreach (var attr in classFile.Attributes)
+        {
+            var resolved = attr.ResolveBody(classFile.ConstantPool);
+            if (resolved is SignatureAttribute sig)
+                builder.Signature = ResolveUtf8(classFile.ConstantPool, sig.SignatureIndex.Value);
+            else if (resolved is SourceFileAttribute src)
+                builder.SourceFile = ResolveUtf8(classFile.ConstantPool, src.SourceFileIndex.Value);
+            else
+                builder.Attributes.Add(attr);
+        }
+
         foreach (var field in classFile.Fields)
         {
             var (name, descriptor) = ResolveMethodNameAndDescriptor(
                 classFile.ConstantPool, field.NameIndex.Value, field.DescriptorIndex.Value);
-            builder._fields.Add(new FieldEntry(field, name, descriptor));
+            var fEntry = new FieldEntry(field, name, descriptor);
+
+            foreach (var attr in field.Attributes)
+            {
+                var resolved = attr.ResolveBody(classFile.ConstantPool);
+                if (resolved is SignatureAttribute sig)
+                    fEntry.Signature = ResolveUtf8(classFile.ConstantPool, sig.SignatureIndex.Value);
+                else
+                    fEntry.Attributes.Add(attr);
+            }
+            builder._fields.Add(fEntry);
         }
 
         foreach (var method in classFile.Methods)
@@ -143,6 +172,7 @@ public class ClassBuilder
 
             var isStatic = (method.AccessFlags & Constants.Flags.MethodAccessFlags.Static) != 0;
             MethodBody? body = null;
+            var mEntry = new MethodEntry(method, name, descriptor, null);
 
             foreach (var attr in method.Attributes)
             {
@@ -152,11 +182,24 @@ public class ClassBuilder
                     body = MethodBody.FromCodeAttribute(codeAttr, classFile.ConstantPool);
                     body.MethodDescriptor = descriptor;
                     body.IsStatic = isStatic;
-                    break;
+                }
+                else if (resolved is SignatureAttribute sig)
+                {
+                    mEntry.Signature = ResolveUtf8(classFile.ConstantPool, sig.SignatureIndex.Value);
+                }
+                else if (resolved is ExceptionsAttribute exc)
+                {
+                    foreach (var idx in exc.ExceptionIndexTable)
+                        mEntry.Exceptions.Add(ResolveClassName(classFile.ConstantPool, idx.Value));
+                }
+                else
+                {
+                    mEntry.Attributes.Add(attr);
                 }
             }
 
-            builder._methods.Add(new MethodEntry(method, name, descriptor, body));
+            mEntry.Body = body;
+            builder._methods.Add(mEntry);
         }
 
         return builder;
@@ -190,6 +233,14 @@ public class ClassBuilder
         ClassFile.Interfaces = interfaces;
         ClassFile.InterfacesCount = new TUShort((ushort)interfaces.Length);
 
+        var classAttrs = new List<AttributeInfo>(RemapAttributes(Attributes.ToArray(), oldToNew));
+        if (!string.IsNullOrEmpty(Signature))
+            classAttrs.Add(AttributeInfo.CreateFromAttribute("Signature", new SignatureAttribute { SignatureIndex = new TUShort((ushort)cp.AddUtf8(Signature)) }, cp));
+        if (!string.IsNullOrEmpty(SourceFile))
+            classAttrs.Add(AttributeInfo.CreateFromAttribute("SourceFile", new SourceFileAttribute { SourceFileIndex = new TUShort((ushort)cp.AddUtf8(SourceFile)) }, cp));
+        ClassFile.Attributes = classAttrs.ToArray();
+        ClassFile.AttributesCount = new TUShort((ushort)ClassFile.Attributes.Length);
+
         ClassFile.Fields = _fields.Select(f => f.Info).ToArray();
         ClassFile.FieldsCount = new TUShort((ushort)ClassFile.Fields.Length);
 
@@ -206,8 +257,6 @@ public class ClassBuilder
             RemapMethod(entry, cp, oldToNew);
         }
 
-        ClassFile.Attributes = RemapAttributes(ClassFile.Attributes, oldToNew);
-
         ClassFile.Write(stream);
     }
 
@@ -216,16 +265,25 @@ public class ClassBuilder
         entry.Info.NameIndex = new TUShort((ushort)cp.AddUtf8(entry.Name));
         entry.Info.DescriptorIndex = new TUShort((ushort)cp.AddUtf8(entry.Descriptor));
 
+        var remappedAttrs = new List<AttributeInfo>(RemapAttributes(entry.Attributes.ToArray(), oldToNew));
+
+        if (!string.IsNullOrEmpty(entry.Signature))
+            remappedAttrs.Add(AttributeInfo.CreateFromAttribute("Signature", new SignatureAttribute { SignatureIndex = new TUShort((ushort)cp.AddUtf8(entry.Signature)) }, cp));
+
+        if (entry.Exceptions.Count > 0)
+        {
+            var idxs = entry.Exceptions.Select(e => new TUShort((ushort)cp.AddClass(e))).ToArray();
+            remappedAttrs.Add(AttributeInfo.CreateFromAttribute("Exceptions", new ExceptionsAttribute(idxs), cp));
+        }
+
         if (entry.Body != null)
         {
             var codeAttr = entry.Body.ToCodeAttribute(cp);
             var bodyAttr = AttributeInfo.CreateFromAttribute("Code", codeAttr, cp);
-            entry.Info.Attributes = [bodyAttr];
+            remappedAttrs.Add(bodyAttr);
         }
-        else
-        {
-            entry.Info.Attributes = RemapAttributes(entry.Info.Attributes, oldToNew);
-        }
+
+        entry.Info.Attributes = remappedAttrs.ToArray();
         entry.Info.AttributesCount = new TUShort((ushort)entry.Info.Attributes.Length);
     }
 
@@ -233,7 +291,12 @@ public class ClassBuilder
     {
         entry.Info.NameIndex = new TUShort((ushort)cp.AddUtf8(entry.Name));
         entry.Info.DescriptorIndex = new TUShort((ushort)cp.AddUtf8(entry.Descriptor));
-        entry.Info.Attributes = RemapAttributes(entry.Info.Attributes, oldToNew);
+
+        var remappedAttrs = new List<AttributeInfo>(RemapAttributes(entry.Attributes.ToArray(), oldToNew));
+        if (!string.IsNullOrEmpty(entry.Signature))
+            remappedAttrs.Add(AttributeInfo.CreateFromAttribute("Signature", new SignatureAttribute { SignatureIndex = new TUShort((ushort)cp.AddUtf8(entry.Signature)) }, cp));
+
+        entry.Info.Attributes = remappedAttrs.ToArray();
         entry.Info.AttributesCount = new TUShort((ushort)entry.Info.Attributes.Length);
     }
 

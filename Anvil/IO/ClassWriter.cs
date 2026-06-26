@@ -11,16 +11,24 @@ public static class ClassWriter
         builder.ClassFile.AccessFlags = node.AccessFlags;
         builder.Name = node.Name;
         builder.SuperName = node.SuperName;
+        builder.Signature = node.Signature;
+        builder.SourceFile = node.SourceFile;
         builder.Interfaces = node.Interfaces.ToList();
+        builder.Attributes = node.Attributes.ToList();
 
         foreach (var field in node.Fields)
         {
-            builder.AddField(field.Name, field.Descriptor, field.AccessFlags);
+            var entry = builder.AddField(field.Name, field.Descriptor, field.AccessFlags);
+            entry.Signature = field.Signature;
+            entry.Attributes = field.Attributes.ToList();
         }
 
         foreach (var method in node.Methods)
         {
             var entry = builder.AddMethod(method.Name, method.Descriptor, method.AccessFlags);
+            entry.Signature = method.Signature;
+            entry.Exceptions = method.Exceptions.ToList();
+            entry.Attributes = method.Attributes.ToList();
             entry.Body = method.Body;
         }
 
