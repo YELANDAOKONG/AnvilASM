@@ -140,8 +140,14 @@ public class MethodBody
 
         var code = attr.Code;
         var pcToInstruction = new Dictionary<int, Instruction>();
-        var branchRecords = new List<(Instruction Source, int SourcePc, int TargetPc, bool IsSwitch, Label? ExistingLabel)>();
         var labelByPc = new Dictionary<int, Label>();
+
+        void TrackInstruction(Instruction insn, int startPc)
+        {
+            insn.Offset = startPc;
+            body.Instructions.Add(insn);
+            pcToInstruction[startPc] = insn;
+        }
 
         var pc = 0;
         while (pc < code.Length)
@@ -178,8 +184,7 @@ public class MethodBody
                         .ToList();
 
                     var insn = new TableSwitchInstruction(low, high, defaultLabel, targetLabels);
-                    body.Instructions.Add(insn);
-                    pcToInstruction[insnStartPc] = insn;
+                    TrackInstruction(insn, insnStartPc);
                     break;
                 }
 
@@ -403,6 +408,13 @@ public class MethodBody
                     body.Instructions.Add(new InsnInstruction(opc));
                     break;
                 }
+            }
+
+            if (body.Instructions.Count > 0)
+            {
+                var last = body.Instructions[^1];
+                last.Offset ??= insnStartPc;
+                pcToInstruction.TryAdd(insnStartPc, last);
             }
         }
 
