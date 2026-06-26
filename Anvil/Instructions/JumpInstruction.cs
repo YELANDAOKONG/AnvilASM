@@ -4,7 +4,7 @@ public class JumpInstruction : Instruction
 {
     public Label Target { get; set; }
 
-    internal int BranchOffset { get; set; }
+    public int BranchOffset { get; set; }
 
     public JumpInstruction(Label target) : base(OperationCode.GOTO)
     {
@@ -18,9 +18,9 @@ public class JumpInstruction : Instruction
 
     private bool IsWide => OpCode is OperationCode.GOTO_W or OperationCode.JSR_W;
 
-    internal bool NeedsWidening => !IsWide && (BranchOffset < short.MinValue || BranchOffset > short.MaxValue);
+    public bool NeedsWidening => !IsWide && (BranchOffset < short.MinValue || BranchOffset > short.MaxValue);
 
-    internal void UpgradeToWide()
+    public void UpgradeToWide()
     {
         OpCode = OpCode switch
         {

@@ -30,7 +30,18 @@ public class StackFrameCalculator
             _body.ResolveLabels();
         }
 
-        var targets = ComputeTargets();
+        // Collect offsets of instructions that carry Labels; frames at these offsets
+        // capture the state *after* the instruction executes.
+        var labeledTargets = new HashSet<int>();
+        foreach (var insn in _body.Instructions)
+        {
+            if (insn.Labels.Count > 0 && insn.Offset.HasValue)
+            {
+                labeledTargets.Add(insn.Offset.Value);
+            }
+        }
+
+        var targets = ComputeTargets(labeledTargets);
         var worklist = new Queue<int>();
         var iteration = 0;
         const int maxIterations = 2000;
@@ -73,10 +84,20 @@ public class StackFrameCalculator
                 var insn = insnList[i];
                 var offset = insn.Offset!.Value;
 
-                if (offset != pc && _frames.ContainsKey(offset))
+                if (offset != pc && targets.Contains(offset))
                 {
-                    if (MergeInto(_frames[offset], state))
+                    if (_frames.ContainsKey(offset))
                     {
+                        if (MergeInto(_frames[offset], state))
+                        {
+                            worklist.Enqueue(offset);
+                        }
+                    }
+                    else
+                    {
+                        // Record the pre-instruction state so this offset can be
+                        // re-processed from the worklist.
+                        _frames[offset] = state.Clone();
                         worklist.Enqueue(offset);
                     }
 
@@ -100,7 +121,19 @@ public class StackFrameCalculator
 
         foreach (var targetPc in sortedTargets)
         {
-            var frameState = _frames[targetPc];
+            FrameState frameState;
+            if (labeledTargets.Contains(targetPc) && insnIndex.TryGetValue(targetPc, out var labelInsnIdx))
+            {
+                // The stored frame is the pre-instruction state; apply the instruction's
+                // effect to produce the post-instruction state for the output frame.
+                frameState = _frames[targetPc].Clone();
+                ApplyEffect(insnList[labelInsnIdx], frameState);
+            }
+            else
+            {
+                frameState = _frames[targetPc];
+            }
+
             var delta = prevPc < 0 ? targetPc : targetPc - prevPc;
             prevPc = targetPc;
             entries.Add(BuildFullFrame(delta, frameState));
@@ -109,9 +142,13 @@ public class StackFrameCalculator
         return new StackMapTableAttribute(entries.ToArray());
     }
 
-    private HashSet<int> ComputeTargets()
+    private HashSet<int> ComputeTargets(HashSet<int> labeledOffsets)
     {
         var targets = new HashSet<int>();
+
+        // Include all offsets that carry user-attached Labels.
+        targets.UnionWith(labeledOffsets);
+
         foreach (var insn in _body.Instructions)
         {
             switch (insn)
@@ -134,6 +171,14 @@ public class StackFrameCalculator
         {
             targets.Add(block.Start.Offset!.Value);
             targets.Add(block.Handler.Offset!.Value);
+        }
+
+        // When nothing else was targeted, always include offset 0 so that the
+        // initial frame (representing the method entry state) is present in the
+        // StackMapTable attribute output.
+        if (targets.Count == 0)
+        {
+            targets.Add(0);
         }
 
         return targets;
