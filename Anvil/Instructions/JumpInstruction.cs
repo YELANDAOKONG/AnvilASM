@@ -6,6 +6,11 @@ public class JumpInstruction : Instruction
 
     internal int BranchOffset { get; set; }
 
+    public JumpInstruction(Label target) : base(OperationCode.GOTO)
+    {
+        Target = target;
+    }
+
     public JumpInstruction(OperationCode opCode, Label target) : base(opCode)
     {
         Target = target;
@@ -13,16 +18,22 @@ public class JumpInstruction : Instruction
 
     private bool IsWide => OpCode is OperationCode.GOTO_W or OperationCode.JSR_W;
 
+    internal bool NeedsWidening => !IsWide && (BranchOffset < short.MinValue || BranchOffset > short.MaxValue);
+
+    internal void UpgradeToWide()
+    {
+        OpCode = OpCode switch
+        {
+            OperationCode.GOTO => OperationCode.GOTO_W,
+            OperationCode.JSR => OperationCode.JSR_W,
+            _ => OpCode
+        };
+    }
+
     public override int GetSize() => IsWide ? 5 : 3;
 
     public override void Write(Stream stream)
     {
-        if (!IsWide && (BranchOffset < short.MinValue || BranchOffset > short.MaxValue))
-        {
-            throw new InvalidOperationException(
-                $"Branch offset {BranchOffset} does not fit in signed 16-bit. Use GOTO_W/JSR_W instead of {OpCode}.");
-        }
-
         stream.WriteByte((byte)OpCode);
 
         if (IsWide)

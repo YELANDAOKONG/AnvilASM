@@ -17,49 +17,160 @@ public class MethodBody
 
     private readonly Dictionary<Label, int> _labelOffsets = new();
 
+    public void Normalize()
+    {
+        for (var i = 0; i < Instructions.Count; i++)
+        {
+            var insn = Instructions[i];
+
+            if (insn is not InsnInstruction si)
+            {
+                continue;
+            }
+
+            switch (si.OpCode)
+            {
+                case OperationCode.ILOAD_0 or OperationCode.ILOAD_1 or OperationCode.ILOAD_2 or OperationCode.ILOAD_3:
+                {
+                    var index = si.OpCode - OperationCode.ILOAD_0;
+                    Instructions[i] = CopyLabels(new VarInstruction(OperationCode.ILOAD, index), si);
+                    break;
+                }
+                case OperationCode.LLOAD_0 or OperationCode.LLOAD_1 or OperationCode.LLOAD_2 or OperationCode.LLOAD_3:
+                {
+                    var index = si.OpCode - OperationCode.LLOAD_0;
+                    Instructions[i] = CopyLabels(new VarInstruction(OperationCode.LLOAD, index), si);
+                    break;
+                }
+                case OperationCode.FLOAD_0 or OperationCode.FLOAD_1 or OperationCode.FLOAD_2 or OperationCode.FLOAD_3:
+                {
+                    var index = si.OpCode - OperationCode.FLOAD_0;
+                    Instructions[i] = CopyLabels(new VarInstruction(OperationCode.FLOAD, index), si);
+                    break;
+                }
+                case OperationCode.DLOAD_0 or OperationCode.DLOAD_1 or OperationCode.DLOAD_2 or OperationCode.DLOAD_3:
+                {
+                    var index = si.OpCode - OperationCode.DLOAD_0;
+                    Instructions[i] = CopyLabels(new VarInstruction(OperationCode.DLOAD, index), si);
+                    break;
+                }
+                case OperationCode.ALOAD_0 or OperationCode.ALOAD_1 or OperationCode.ALOAD_2 or OperationCode.ALOAD_3:
+                {
+                    var index = si.OpCode - OperationCode.ALOAD_0;
+                    Instructions[i] = CopyLabels(new VarInstruction(OperationCode.ALOAD, index), si);
+                    break;
+                }
+                case OperationCode.ISTORE_0 or OperationCode.ISTORE_1 or OperationCode.ISTORE_2 or OperationCode.ISTORE_3:
+                {
+                    var index = si.OpCode - OperationCode.ISTORE_0;
+                    Instructions[i] = CopyLabels(new VarInstruction(OperationCode.ISTORE, index), si);
+                    break;
+                }
+                case OperationCode.LSTORE_0 or OperationCode.LSTORE_1 or OperationCode.LSTORE_2 or OperationCode.LSTORE_3:
+                {
+                    var index = si.OpCode - OperationCode.LSTORE_0;
+                    Instructions[i] = CopyLabels(new VarInstruction(OperationCode.LSTORE, index), si);
+                    break;
+                }
+                case OperationCode.FSTORE_0 or OperationCode.FSTORE_1 or OperationCode.FSTORE_2 or OperationCode.FSTORE_3:
+                {
+                    var index = si.OpCode - OperationCode.FSTORE_0;
+                    Instructions[i] = CopyLabels(new VarInstruction(OperationCode.FSTORE, index), si);
+                    break;
+                }
+                case OperationCode.DSTORE_0 or OperationCode.DSTORE_1 or OperationCode.DSTORE_2 or OperationCode.DSTORE_3:
+                {
+                    var index = si.OpCode - OperationCode.DSTORE_0;
+                    Instructions[i] = CopyLabels(new VarInstruction(OperationCode.DSTORE, index), si);
+                    break;
+                }
+                case OperationCode.ASTORE_0 or OperationCode.ASTORE_1 or OperationCode.ASTORE_2 or OperationCode.ASTORE_3:
+                {
+                    var index = si.OpCode - OperationCode.ASTORE_0;
+                    Instructions[i] = CopyLabels(new VarInstruction(OperationCode.ASTORE, index), si);
+                    break;
+                }
+                case OperationCode.ICONST_M1:
+                {
+                    Instructions[i] = CopyLabels(new IntInstruction(OperationCode.BIPUSH, -1), si);
+                    break;
+                }
+                case >= OperationCode.ICONST_0 and <= OperationCode.ICONST_5:
+                {
+                    var value = si.OpCode - OperationCode.ICONST_0;
+                    Instructions[i] = CopyLabels(new IntInstruction(OperationCode.BIPUSH, value), si);
+                    break;
+                }
+            }
+        }
+    }
+
+    private static T CopyLabels<T>(T target, Instruction source) where T : Instruction
+    {
+        target.Labels.AddRange(source.Labels);
+        return target;
+    }
+
     public void ResolveLabels()
     {
         _labelOffsets.Clear();
 
-        var pc = 0;
-        foreach (var instruction in Instructions)
+        while (true)
         {
-            instruction.Offset = pc;
-            pc += instruction.GetSize();
-
-            foreach (var label in instruction.Labels)
+            var pc = 0;
+            foreach (var instruction in Instructions)
             {
-                label.Offset = instruction.Offset;
-                _labelOffsets[label] = instruction.Offset.Value;
+                instruction.Offset = pc;
+                pc += instruction.GetSize();
+
+                foreach (var label in instruction.Labels)
+                {
+                    label.Offset = instruction.Offset;
+                    _labelOffsets[label] = instruction.Offset.Value;
+                }
             }
-        }
 
-        foreach (var instruction in Instructions)
-        {
-            switch (instruction)
+            var needsWidening = false;
+
+            foreach (var instruction in Instructions)
             {
-                case JumpInstruction jump:
+                switch (instruction)
                 {
-                    var targetOffset = GetLabelOffset(jump.Target);
-                    jump.BranchOffset = targetOffset - jump.Offset!.Value;
-                    break;
+                    case JumpInstruction jump:
+                    {
+                        var targetOffset = GetLabelOffset(jump.Target);
+                        jump.BranchOffset = targetOffset - jump.Offset!.Value;
+
+                        if (jump.NeedsWidening)
+                        {
+                            jump.UpgradeToWide();
+                            needsWidening = true;
+                        }
+
+                        break;
+                    }
+                    case TableSwitchInstruction table:
+                    {
+                        table.DefaultOffset = GetLabelOffset(table.DefaultTarget) - table.Offset!.Value;
+                        table.TargetOffsets = table.Targets
+                            .Select(t => GetLabelOffset(t) - table.Offset!.Value)
+                            .ToList();
+                        break;
+                    }
+                    case LookupSwitchInstruction lookup:
+                    {
+                        lookup.DefaultOffset = GetLabelOffset(lookup.DefaultTarget) - lookup.Offset!.Value;
+                        lookup.ResolvedPairs = lookup.Pairs
+                            .Select(p => (p.Key, GetLabelOffset(p.Target) - lookup.Offset!.Value))
+                            .ToList();
+                        break;
+                    }
                 }
-                case TableSwitchInstruction table:
-                {
-                    table.DefaultOffset = GetLabelOffset(table.DefaultTarget) - table.Offset!.Value;
-                    table.TargetOffsets = table.Targets
-                        .Select(t => GetLabelOffset(t) - table.Offset!.Value)
-                        .ToList();
-                    break;
-                }
-                case LookupSwitchInstruction lookup:
-                {
-                    lookup.DefaultOffset = GetLabelOffset(lookup.DefaultTarget) - lookup.Offset!.Value;
-                    lookup.ResolvedPairs = lookup.Pairs
-                        .Select(p => (p.Key, GetLabelOffset(p.Target) - lookup.Offset!.Value))
-                        .ToList();
-                    break;
-                }
+            }
+
+            if (!needsWidening)
+            {
+                break;
             }
         }
     }
