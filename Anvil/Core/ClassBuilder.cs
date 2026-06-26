@@ -40,6 +40,11 @@ public class FieldEntry
 public class ClassBuilder
 {
     public ClassFile ClassFile { get; private set; }
+    
+    public string Name { get; set; } = string.Empty;
+    public string SuperName { get; set; } = string.Empty;
+    public List<string> Interfaces { get; set; } = [];
+
     private readonly List<FieldEntry> _fields = [];
     private readonly List<MethodEntry> _methods = [];
 
@@ -106,6 +111,24 @@ public class ClassBuilder
         var classFile = ClassFile.Read(stream);
         var builder = new ClassBuilder(classFile);
 
+        if (classFile.ThisClass.Value > 0)
+        {
+            builder.Name = ResolveClassName(classFile.ConstantPool, classFile.ThisClass.Value);
+        }
+        
+        if (classFile.SuperClass.Value > 0)
+        {
+            builder.SuperName = ResolveClassName(classFile.ConstantPool, classFile.SuperClass.Value);
+        }
+
+        foreach (var iface in classFile.Interfaces)
+        {
+            if (iface.Value > 0)
+            {
+                builder.Interfaces.Add(ResolveClassName(classFile.ConstantPool, iface.Value));
+            }
+        }
+
         foreach (var field in classFile.Fields)
         {
             var (name, descriptor) = ResolveMethodNameAndDescriptor(
@@ -149,23 +172,23 @@ public class ClassBuilder
         ClassFile.ConstantPool = newConstantPool;
         ClassFile.ConstantPoolCount = new TUShort((ushort)newConstantPool.Length);
 
-        if (ClassFile.ThisClass.Value > 0)
+        if (!string.IsNullOrEmpty(Name))
         {
-            ClassFile.ThisClass = new TUShort((ushort)oldToNew[ClassFile.ThisClass.Value]);
+            ClassFile.ThisClass = new TUShort((ushort)cp.AddClass(Name));
         }
 
-        if (ClassFile.SuperClass.Value > 0)
+        if (!string.IsNullOrEmpty(SuperName))
         {
-            ClassFile.SuperClass = new TUShort((ushort)oldToNew[ClassFile.SuperClass.Value]);
+            ClassFile.SuperClass = new TUShort((ushort)cp.AddClass(SuperName));
         }
 
-        for (var i = 0; i < ClassFile.Interfaces.Length; i++)
+        var interfaces = new TUShort[Interfaces.Count];
+        for (var i = 0; i < Interfaces.Count; i++)
         {
-            if (ClassFile.Interfaces[i].Value > 0)
-            {
-                ClassFile.Interfaces[i] = new TUShort((ushort)oldToNew[ClassFile.Interfaces[i].Value]);
-            }
+            interfaces[i] = new TUShort((ushort)cp.AddClass(Interfaces[i]));
         }
+        ClassFile.Interfaces = interfaces;
+        ClassFile.InterfacesCount = new TUShort((ushort)interfaces.Length);
 
         ClassFile.Fields = _fields.Select(f => f.Info).ToArray();
         ClassFile.FieldsCount = new TUShort((ushort)ClassFile.Fields.Length);
