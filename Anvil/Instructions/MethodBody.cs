@@ -337,17 +337,7 @@ public class MethodBody
 
     public CodeAttribute ToCodeAttribute(ConstantPoolBuilder cp)
     {
-        if (MaxStack is < 0 or > ushort.MaxValue)
-        {
-            throw new InvalidOperationException(
-                $"MaxStack must be between 0 and 65535, but was {MaxStack}.");
-        }
-
-        if (MaxLocals is < 0 or > ushort.MaxValue)
-        {
-            throw new InvalidOperationException(
-                $"MaxLocals must be between 0 and 65535, but was {MaxLocals}.");
-        }
+        ValidateMaximums();
 
         ResolveCpReferences(cp);
         ResolveLabels();
@@ -355,6 +345,20 @@ public class MethodBody
         using var codeStream = new MemoryStream();
         WriteBytecode(codeStream);
         var codeBytes = codeStream.ToArray();
+
+        StackMapTableAttribute? stackMapTable = null;
+        if (MethodDescriptor != null)
+        {
+            var calculator = new StackFrameCalculator(
+                this,
+                MethodDescriptor,
+                IsStatic,
+                cp);
+            stackMapTable = calculator.Compute();
+            MaxStack = Math.Max(MaxStack, calculator.MaxStack);
+            MaxLocals = Math.Max(MaxLocals, calculator.MaxLocals);
+            ValidateMaximums();
+        }
 
         var exceptionTable = new ExceptionTableEntry[TryCatchBlocks.Count];
         for (var i = 0; i < TryCatchBlocks.Count; i++)
@@ -396,16 +400,35 @@ public class MethodBody
 
         AddPositionDependentAttributes(codeAttr, cp, codeBytes.Length);
 
-        if (MethodDescriptor != null)
+        if (stackMapTable != null)
         {
-            var sfc = new StackFrameCalculator(this, MethodDescriptor, IsStatic, cp);
-            var smt = sfc.Compute();
-            var smtAttr = AttributeInfo.CreateFromAttribute("StackMapTable", smt, cp);
-            var attrs = new List<AttributeInfo>(codeAttr.Attributes) { smtAttr };
+            var stackMapAttribute = AttributeInfo.CreateFromAttribute(
+                "StackMapTable",
+                stackMapTable,
+                cp);
+            var attrs = new List<AttributeInfo>(codeAttr.Attributes)
+            {
+                stackMapAttribute
+            };
             codeAttr.Attributes = attrs.ToArray();
         }
 
         return codeAttr;
+    }
+
+    private void ValidateMaximums()
+    {
+        if (MaxStack is < 0 or > ushort.MaxValue)
+        {
+            throw new InvalidOperationException(
+                $"MaxStack must be between 0 and 65535, but was {MaxStack}.");
+        }
+
+        if (MaxLocals is < 0 or > ushort.MaxValue)
+        {
+            throw new InvalidOperationException(
+                $"MaxLocals must be between 0 and 65535, but was {MaxLocals}.");
+        }
     }
 
     private void AddPositionDependentAttributes(

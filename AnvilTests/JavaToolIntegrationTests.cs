@@ -30,8 +30,6 @@ public class JavaToolIntegrationTests
                 MethodAccessFlags.Public | MethodAccessFlags.Static);
             main.Body = new MethodBody
             {
-                MaxStack = 2,
-                MaxLocals = 1,
                 Instructions =
                 [
                     new FieldInstruction(
@@ -152,6 +150,17 @@ public class JavaToolIntegrationTests
             await using (var input = File.OpenRead(compiledClassPath))
             {
                 var builder = ClassBuilder.Read(input);
+                foreach (var method in builder.Methods)
+                {
+                    if (method.Body is null)
+                    {
+                        continue;
+                    }
+
+                    method.Body.MaxStack = 0;
+                    method.Body.MaxLocals = 0;
+                }
+
                 await using var output = File.Create(roundTrippedClassPath);
                 builder.Write(output);
             }

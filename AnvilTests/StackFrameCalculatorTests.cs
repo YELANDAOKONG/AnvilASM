@@ -341,6 +341,80 @@ public class StackFrameCalculatorTests
         Assert.Equal("java/util/List", name);
     }
 
+    [Fact]
+    public void Compute_TracksCategory2StackAndLocalSlots()
+    {
+        var body = new MethodBody
+        {
+            MethodDescriptor = "(J)J",
+            IsStatic = true,
+            Instructions =
+            {
+                new InsnInstruction(OperationCode.LCONST_0),
+                new InsnInstruction(OperationCode.DUP2),
+                new VarInstruction(OperationCode.LSTORE, 4),
+                new InsnInstruction(OperationCode.LRETURN)
+            }
+        };
+        var calculator = new StackFrameCalculator(
+            body,
+            body.MethodDescriptor,
+            body.IsStatic,
+            new ConstantPoolBuilder());
+
+        calculator.Compute();
+
+        Assert.Equal(4, calculator.MaxStack);
+        Assert.Equal(6, calculator.MaxLocals);
+    }
+
+    [Fact]
+    public void Compute_IncludesExceptionHandlerStackAndDebugLocalSlots()
+    {
+        var tryStart = new Label("tryStart");
+        var tryEnd = new Label("tryEnd");
+        var handler = new Label("handler");
+        var protectedReturn = new InsnInstruction(OperationCode.RETURN);
+        protectedReturn.Labels.Add(tryStart);
+        var handlerPop = new InsnInstruction(OperationCode.POP);
+        handlerPop.Labels.Add(handler);
+        var body = new MethodBody
+        {
+            MethodDescriptor = "()V",
+            IsStatic = true,
+            Instructions =
+            {
+                protectedReturn,
+                handlerPop,
+                new InsnInstruction(OperationCode.RETURN)
+            },
+            TryCatchBlocks =
+            {
+                new TryCatchBlock(tryStart, tryEnd, handler, "java/lang/Exception")
+            },
+            LocalVariables =
+            {
+                new BytecodeLocalVariable(
+                    tryStart,
+                    tryEnd,
+                    "wideValue",
+                    "D",
+                    8)
+            }
+        };
+        body.MarkLabel("tryEnd", handlerPop);
+        var calculator = new StackFrameCalculator(
+            body,
+            body.MethodDescriptor,
+            body.IsStatic,
+            new ConstantPoolBuilder());
+
+        calculator.Compute();
+
+        Assert.Equal(1, calculator.MaxStack);
+        Assert.Equal(10, calculator.MaxLocals);
+    }
+
     private static StackMapTableAttribute Compute(MethodBody body)
     {
         return new StackFrameCalculator(

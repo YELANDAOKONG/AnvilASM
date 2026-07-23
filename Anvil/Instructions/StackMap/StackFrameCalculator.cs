@@ -16,6 +16,9 @@ public class StackFrameCalculator
     private readonly Dictionary<int, FrameState> _frames = new();
     private readonly Dictionary<string, JvmObject> _handlerTypes = new(StringComparer.Ordinal);
 
+    public int MaxStack { get; private set; }
+    public int MaxLocals { get; private set; }
+
     public StackFrameCalculator(
         MethodBody body,
         string methodDescriptor,
@@ -32,6 +35,8 @@ public class StackFrameCalculator
         _body.ResolveLabels();
         _frames.Clear();
         _handlerTypes.Clear();
+        MaxStack = 0;
+        MaxLocals = ComputeMaxLocals();
 
         var instructionIndex = BuildInstructionIndex();
         if (_body.Instructions.Count == 0)
@@ -48,8 +53,10 @@ public class StackFrameCalculator
             var instruction = _body.Instructions[index];
             var state = _frames[pc].Clone();
 
+            TrackMaxStack(state);
             PropagateExceptionHandlers(pc, state, worklist);
             ApplyEffect(instruction, state);
+            TrackMaxStack(state);
 
             foreach (var successor in GetSuccessors(instruction, index))
             {
@@ -206,6 +213,8 @@ public class StackFrameCalculator
 
     private void MergeFrame(int pc, FrameState incoming, Queue<int> worklist)
     {
+        TrackMaxStack(incoming);
+
         if (!_frames.TryGetValue(pc, out var current))
         {
             _frames[pc] = incoming.Clone();
@@ -256,6 +265,91 @@ public class StackFrameCalculator
         }
 
         return changed;
+    }
+
+    private void TrackMaxStack(FrameState state)
+    {
+        var slots = state.Stack.Sum(GetSlotWidth);
+        MaxStack = Math.Max(MaxStack, slots);
+    }
+
+    private int ComputeMaxLocals()
+    {
+        var maximum = _initialState.Locals.Count;
+
+        foreach (var instruction in _body.Instructions)
+        {
+            maximum = Math.Max(maximum, GetRequiredLocalCount(instruction));
+        }
+
+        foreach (var variable in _body.LocalVariables)
+        {
+            var width = variable.Descriptor is null
+                ? 1
+                : GetSlotWidth(DescriptorParser.ParseType(variable.Descriptor));
+            maximum = Math.Max(maximum, checked(variable.Index + width));
+        }
+
+        foreach (var typeAnnotation in _body.TypeAnnotations)
+        {
+            foreach (var (_, _, index) in typeAnnotation.LocalVariableTargets)
+            {
+                maximum = Math.Max(maximum, checked(index + 1));
+            }
+        }
+
+        return maximum;
+    }
+
+    private static int GetRequiredLocalCount(Instruction instruction)
+    {
+        if (instruction is IincInstruction increment)
+        {
+            return checked(increment.VarIndex + 1);
+        }
+
+        if (instruction is VarInstruction variable)
+        {
+            return checked(variable.VarIndex + GetLocalWidth(variable.OpCode));
+        }
+
+        if (IsImplicitVariableOpCode(instruction.OpCode))
+        {
+            return checked(
+                GetVariableIndex(instruction) + GetLocalWidth(instruction.OpCode));
+        }
+
+        return 0;
+    }
+
+    private static bool IsImplicitVariableOpCode(OperationCode opCode)
+    {
+        return opCode is >= OperationCode.ILOAD_0 and <= OperationCode.ALOAD_3
+            or >= OperationCode.ISTORE_0 and <= OperationCode.ASTORE_3;
+    }
+
+    private static int GetLocalWidth(OperationCode opCode)
+    {
+        return opCode is OperationCode.LLOAD
+            or OperationCode.DLOAD
+            or OperationCode.LSTORE
+            or OperationCode.DSTORE
+            or >= OperationCode.LLOAD_0 and <= OperationCode.LLOAD_3
+            or >= OperationCode.DLOAD_0 and <= OperationCode.DLOAD_3
+            or >= OperationCode.LSTORE_0 and <= OperationCode.LSTORE_3
+            or >= OperationCode.DSTORE_0 and <= OperationCode.DSTORE_3
+            ? 2
+            : 1;
+    }
+
+    private static int GetSlotWidth(JvmType type)
+    {
+        return IsCategory2(type) ? 2 : 1;
+    }
+
+    private static int GetSlotWidth(TypeDescriptor type)
+    {
+        return type.Tag is DescriptorTag.Long or DescriptorTag.Double ? 2 : 1;
     }
 
     private JvmType MergeTypes(JvmType first, JvmType second)

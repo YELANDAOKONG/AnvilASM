@@ -145,6 +145,52 @@ public class MethodBodyTests
     }
 
     [Fact]
+    public void ToCodeAttribute_ComputesMaximumsAndUpdatesMethodBody()
+    {
+        var body = new MethodBody
+        {
+            MethodDescriptor = "(JD)V",
+            IsStatic = false,
+            Instructions =
+            {
+                new InsnInstruction(OperationCode.LCONST_0),
+                new InsnInstruction(OperationCode.DUP2),
+                new VarInstruction(OperationCode.LSTORE, 7),
+                new InsnInstruction(OperationCode.POP2),
+                new InsnInstruction(OperationCode.RETURN)
+            }
+        };
+
+        var attribute = body.ToCodeAttribute(new ConstantPoolBuilder());
+
+        Assert.Equal(4, attribute.MaxStack.Value);
+        Assert.Equal(9, attribute.MaxLocals.Value);
+        Assert.Equal(4, body.MaxStack);
+        Assert.Equal(9, body.MaxLocals);
+    }
+
+    [Fact]
+    public void ToCodeAttribute_PreservesLargerExplicitMaximums()
+    {
+        var body = new MethodBody
+        {
+            MethodDescriptor = "()V",
+            IsStatic = true,
+            MaxStack = 10,
+            MaxLocals = 20,
+            Instructions =
+            {
+                new InsnInstruction(OperationCode.RETURN)
+            }
+        };
+
+        var attribute = body.ToCodeAttribute(new ConstantPoolBuilder());
+
+        Assert.Equal(10, attribute.MaxStack.Value);
+        Assert.Equal(20, attribute.MaxLocals.Value);
+    }
+
+    [Fact]
     public void WriteBytecode_ProducesValidBytes()
     {
         var body = new MethodBody
