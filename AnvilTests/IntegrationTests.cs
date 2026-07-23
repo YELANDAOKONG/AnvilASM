@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 using Anvil.Core;
 using Anvil.Instructions;
 using Anvil.Instructions.ConstantPool;
@@ -136,14 +134,10 @@ public class IntegrationTests
         Assert.Equal(first.ToArray(), second.ToArray());
     }
 
-    [Fact]
-    public void RoundTripTestClass_ShouldPassJvmVerificationWhenJavaIsAvailable()
+    [JavaIntegrationFact]
+    [Trait("Category", "JavaIntegration")]
+    public async Task RoundTripTestClass_ShouldPassJvmVerification()
     {
-        if (!CanRunJava())
-        {
-            return;
-        }
-
         var directory = Path.Combine(
             Path.GetTempPath(),
             $"anvil-jvm-verification-{Guid.NewGuid():N}");
@@ -176,53 +170,21 @@ public class IntegrationTests
                 builder.Write(output);
             }
 
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "java",
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false
-            };
-            startInfo.ArgumentList.Add("-Xverify:all");
-            startInfo.ArgumentList.Add("-cp");
-            startInfo.ArgumentList.Add(directory);
-            startInfo.ArgumentList.Add("Test");
-
-            using var process = Process.Start(startInfo);
-            Assert.NotNull(process);
-            process!.WaitForExit();
-            var standardError = process.StandardError.ReadToEnd();
+            var result = await JavaToolRunner.RunAsync(
+                "java",
+                "-Xverify:all",
+                "-cp",
+                directory,
+                "Test");
 
             Assert.True(
-                process.ExitCode == 0,
-                $"JVM verification failed with exit code {process.ExitCode}: {standardError}");
+                result.ExitCode == 0,
+                $"JVM verification failed with exit code {result.ExitCode}: "
+                + result.StandardError);
         }
         finally
         {
             Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    private static bool CanRunJava()
-    {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "java",
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false
-            };
-            startInfo.ArgumentList.Add("-version");
-
-            using var process = Process.Start(startInfo);
-            process?.WaitForExit();
-            return process?.ExitCode == 0;
-        }
-        catch
-        {
-            return false;
         }
     }
 }
