@@ -8,28 +8,37 @@ public class TypeInstruction : Instruction
 
     public int TypeIndex { get; set; }
 
-    private bool _resolved;
-
     public TypeInstruction(OperationCode opCode, string type) : base(opCode)
     {
+        ValidateOpCode(opCode);
         Type = type;
     }
 
     public TypeInstruction(OperationCode opCode, int typeIndex) : base(opCode)
     {
+        ValidateOpCode(opCode);
         TypeIndex = typeIndex;
-        _resolved = true;
+    }
+
+    private static void ValidateOpCode(OperationCode opCode)
+    {
+        if (opCode is not (OperationCode.NEW
+            or OperationCode.ANEWARRAY
+            or OperationCode.CHECKCAST
+            or OperationCode.INSTANCEOF))
+        {
+            throw new ArgumentException($"OpCode {opCode} is not a type instruction.", nameof(opCode));
+        }
     }
 
     internal void Resolve(ConstantPoolBuilder cp)
     {
-        if (_resolved)
+        if (Type is null)
         {
             return;
         }
 
-        TypeIndex = cp.AddClass(Type!);
-        _resolved = true;
+        TypeIndex = cp.AddClass(Type);
     }
 
     public override int GetSize() => 3;

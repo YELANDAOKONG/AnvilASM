@@ -5,15 +5,14 @@ using Anvil.Structures.Attributes;
 using Anvil.Structures.Attributes.StackMap;
 using Anvil.Structures.Attributes.StackMap.Frames;
 using Anvil.Structures.Attributes.StackMap.Types;
+using Anvil.Structures.ConstantPool;
 
 namespace AnvilTests;
 
 public class StackFrameCalculatorTests
 {
-    private static ConstantPoolBuilder MakeCp() => new();
-
     [Fact]
-    public void Compute_EmptyVoidMethod_ProducesSingleFrame()
+    public void Compute_SingleReturn_UsesImplicitInitialFrame()
     {
         var body = new MethodBody
         {
@@ -22,17 +21,14 @@ public class StackFrameCalculatorTests
             Instructions = [new InsnInstruction(OperationCode.RETURN)]
         };
 
-        var attr = new StackFrameCalculator(body, "()V", true, MakeCp()).Compute();
-        Assert.NotEmpty(attr.Entries);
+        var attribute = Compute(body);
+
+        Assert.Empty(attribute.Entries);
     }
 
     [Fact]
-    public void Compute_StoreThenLoad_TracksLocalType()
+    public void Compute_StoreThenLoad_TracksPreInstructionLocalType()
     {
-        var label = new Label();
-        var storeInsn = new VarInstruction(OperationCode.ISTORE, 0);
-        storeInsn.Labels.Add(label);
-
         var body = new MethodBody
         {
             MethodDescriptor = "()V",
@@ -40,29 +36,21 @@ public class StackFrameCalculatorTests
             Instructions =
             {
                 new IntInstruction(OperationCode.BIPUSH, 42),
-                storeInsn,
+                new VarInstruction(OperationCode.ISTORE, 0),
                 new VarInstruction(OperationCode.ILOAD, 0),
                 new InsnInstruction(OperationCode.RETURN)
             }
         };
 
-        var cp = MakeCp();
-        var attr = new StackFrameCalculator(body, "()V", true, cp).Compute();
-        var fullFrames = attr.Entries.OfType<FullFrame>().ToList();
+        var frame = GetFrameAtOffset(Compute(body), 3);
 
-        var frameAtStore = fullFrames.FirstOrDefault(f => f.OffsetDelta.Value == 2);
-        Assert.NotNull(frameAtStore);
-        var local0 = frameAtStore!.Locals.FirstOrDefault() as IntegerVariableInfo;
-        Assert.NotNull(local0);
+        Assert.IsType<IntegerVariableInfo>(Assert.Single(frame.Locals));
+        Assert.Empty(frame.Stack);
     }
 
     [Fact]
     public void Compute_AStore_PreservesReferenceTypeToLocal()
     {
-        var label = new Label();
-        var storeInsn = new VarInstruction(OperationCode.ASTORE, 0);
-        storeInsn.Labels.Add(label);
-
         var body = new MethodBody
         {
             MethodDescriptor = "()V",
@@ -70,29 +58,20 @@ public class StackFrameCalculatorTests
             Instructions =
             {
                 new InsnInstruction(OperationCode.ACONST_NULL),
-                storeInsn,
+                new VarInstruction(OperationCode.ASTORE, 0),
                 new VarInstruction(OperationCode.ALOAD, 0),
-                new InsnInstruction(OperationCode.RETURN)
+                new InsnInstruction(OperationCode.ARETURN)
             }
         };
 
-        var cp = MakeCp();
-        var attr = new StackFrameCalculator(body, "()V", true, cp).Compute();
-        var fullFrames = attr.Entries.OfType<FullFrame>().ToList();
+        var frame = GetFrameAtOffset(Compute(body), 2);
 
-        var frameAtStore = fullFrames.FirstOrDefault(f => f.OffsetDelta.Value == 1);
-        Assert.NotNull(frameAtStore);
-        var local0 = frameAtStore!.Locals.FirstOrDefault() as NullVariableInfo;
-        Assert.NotNull(local0);
+        Assert.IsType<NullVariableInfo>(Assert.Single(frame.Locals));
     }
 
     [Fact]
-    public void Compute_LStore_UpdatesTwoLocalSlots()
+    public void Compute_LStore_EncodesLongAsOneVerificationEntry()
     {
-        var label = new Label();
-        var storeInsn = new VarInstruction(OperationCode.LSTORE, 0);
-        storeInsn.Labels.Add(label);
-
         var body = new MethodBody
         {
             MethodDescriptor = "()V",
@@ -100,59 +79,40 @@ public class StackFrameCalculatorTests
             Instructions =
             {
                 new InsnInstruction(OperationCode.LCONST_0),
-                storeInsn,
+                new VarInstruction(OperationCode.LSTORE, 0),
                 new InsnInstruction(OperationCode.RETURN)
             }
         };
 
-        var cp = MakeCp();
-        var attr = new StackFrameCalculator(body, "()V", true, cp).Compute();
-        var fullFrames = attr.Entries.OfType<FullFrame>().ToList();
+        var frame = GetFrameAtOffset(Compute(body), 2);
 
-        var frameAfterStore = fullFrames.FirstOrDefault(f => f.OffsetDelta.Value == 1);
-        Assert.NotNull(frameAfterStore);
-        Assert.True(frameAfterStore!.Locals.Length >= 2);
-        Assert.IsType<LongVariableInfo>(frameAfterStore.Locals[0]);
-        Assert.IsType<TopVariableInfo>(frameAfterStore.Locals[1]);
+        Assert.IsType<LongVariableInfo>(Assert.Single(frame.Locals));
     }
 
     [Fact]
     public void Compute_Dup_DuplicatesTopOfStack()
     {
-        var label = new Label();
-        var dupInsn = new InsnInstruction(OperationCode.DUP);
-        dupInsn.Labels.Add(label);
-
         var body = new MethodBody
         {
-            MethodDescriptor = "()V",
+            MethodDescriptor = "()I",
             IsStatic = true,
             Instructions =
             {
                 new IntInstruction(OperationCode.BIPUSH, 1),
-                dupInsn,
-                new InsnInstruction(OperationCode.RETURN)
+                new InsnInstruction(OperationCode.DUP),
+                new InsnInstruction(OperationCode.IRETURN)
             }
         };
 
-        var cp = MakeCp();
-        var attr = new StackFrameCalculator(body, "()V", true, cp).Compute();
-        var fullFrames = attr.Entries.OfType<FullFrame>().ToList();
+        var frame = GetFrameAtOffset(Compute(body), 2);
 
-        var frameAfterDup = fullFrames.FirstOrDefault();
-        Assert.NotNull(frameAfterDup);
-        Assert.Equal(2, frameAfterDup!.Stack.Length);
-        Assert.IsType<IntegerVariableInfo>(frameAfterDup.Stack[0]);
-        Assert.IsType<IntegerVariableInfo>(frameAfterDup.Stack[1]);
+        Assert.Equal(2, frame.Stack.Length);
+        Assert.All(frame.Stack, item => Assert.IsType<IntegerVariableInfo>(item));
     }
 
     [Fact]
-    public void Compute_Swap_SwapsTopTwo()
+    public void Compute_Swap_SwapsTopTwoValues()
     {
-        var label = new Label();
-        var swapInsn = new InsnInstruction(OperationCode.SWAP);
-        swapInsn.Labels.Add(label);
-
         var body = new MethodBody
         {
             MethodDescriptor = "()V",
@@ -161,37 +121,29 @@ public class StackFrameCalculatorTests
             {
                 new InsnInstruction(OperationCode.ACONST_NULL),
                 new IntInstruction(OperationCode.BIPUSH, 1),
-                swapInsn,
+                new InsnInstruction(OperationCode.SWAP),
+                new InsnInstruction(OperationCode.POP),
+                new InsnInstruction(OperationCode.POP),
                 new InsnInstruction(OperationCode.RETURN)
             }
         };
 
-        var cp = MakeCp();
-        var attr = new StackFrameCalculator(body, "()V", true, cp).Compute();
-        var fullFrames = attr.Entries.OfType<FullFrame>().ToList();
+        var frame = GetFrameAtOffset(Compute(body), 3);
 
-        var frameAfterSwap = fullFrames.FirstOrDefault();
-        Assert.NotNull(frameAfterSwap);
-        Assert.Equal(2, frameAfterSwap!.Stack.Length);
-        Assert.IsType<IntegerVariableInfo>(frameAfterSwap.Stack[0]);
-        Assert.IsType<NullVariableInfo>(frameAfterSwap.Stack[1]);
+        Assert.IsType<IntegerVariableInfo>(frame.Stack[0]);
+        Assert.IsType<NullVariableInfo>(frame.Stack[1]);
     }
 
     [Fact]
-    public void Compute_ExceptionHandler_HasSameLocalsAsTryEntry()
+    public void Compute_ExceptionHandler_UsesProtectedLocalsAndExceptionStack()
     {
-        var tryStart = new Label();
-        var tryEnd = new Label();
-        var handler = new Label();
-
-        var pushInsn = new IntInstruction(OperationCode.BIPUSH, 0);
-        var storeInsn = new VarInstruction(OperationCode.ISTORE, 0);
-        var tryStartRet = new InsnInstruction(OperationCode.RETURN);
-        tryStartRet.Labels.Add(tryStart);
-        var tryEndNop = new InsnInstruction(OperationCode.NOP);
-        tryEndNop.Labels.Add(tryEnd);
-        var handlerNop = new InsnInstruction(OperationCode.NOP);
-        handlerNop.Labels.Add(handler);
+        var tryStart = new Label("tryStart");
+        var tryEnd = new Label("tryEnd");
+        var handler = new Label("handler");
+        var protectedReturn = new InsnInstruction(OperationCode.RETURN);
+        protectedReturn.Labels.Add(tryStart);
+        var handlerPop = new InsnInstruction(OperationCode.POP);
+        handlerPop.Labels.Add(handler);
 
         var body = new MethodBody
         {
@@ -199,11 +151,10 @@ public class StackFrameCalculatorTests
             IsStatic = true,
             Instructions =
             {
-                pushInsn,
-                storeInsn,
-                tryStartRet,
-                tryEndNop,
-                handlerNop,
+                new IntInstruction(OperationCode.BIPUSH, 0),
+                new VarInstruction(OperationCode.ISTORE, 0),
+                protectedReturn,
+                handlerPop,
                 new InsnInstruction(OperationCode.RETURN)
             },
             TryCatchBlocks =
@@ -211,128 +162,215 @@ public class StackFrameCalculatorTests
                 new TryCatchBlock(tryStart, tryEnd, handler, "java/lang/Exception")
             }
         };
+        body.MarkLabel("tryEnd", handlerPop);
 
-        var cp = MakeCp();
-        var attr = new StackFrameCalculator(body, "()V", true, cp).Compute();
-        var fullFrames = attr.Entries.OfType<FullFrame>().ToList();
+        var frame = GetFrameAtOffset(Compute(body), 3);
 
-        Assert.NotEmpty(fullFrames);
+        Assert.IsType<IntegerVariableInfo>(Assert.Single(frame.Locals));
+        Assert.IsType<ObjectVariableInfo>(Assert.Single(frame.Stack));
     }
 
     [Fact]
-    public void Compute_AnNewArray_UsesCorrectArrayType()
+    public void Compute_ANewArray_PushesArrayReference()
     {
-        var label = new Label();
-        var arrayInsn = new TypeInstruction(OperationCode.ANEWARRAY, "java/lang/String");
-        arrayInsn.Labels.Add(label);
-
         var body = new MethodBody
         {
-            MethodDescriptor = "()V",
+            MethodDescriptor = "()[Ljava/lang/String;",
             IsStatic = true,
             Instructions =
             {
                 new IntInstruction(OperationCode.BIPUSH, 5),
-                arrayInsn,
+                new TypeInstruction(OperationCode.ANEWARRAY, "java/lang/String"),
+                new InsnInstruction(OperationCode.ARETURN)
+            }
+        };
+
+        var frame = GetFrameAtOffset(Compute(body), 4);
+
+        Assert.IsType<ObjectVariableInfo>(Assert.Single(frame.Stack));
+    }
+
+    [Fact]
+    public void Compute_RegularInstanceMethod_HasInitializedThis()
+    {
+        var body = new MethodBody
+        {
+            MethodName = "run",
+            OwnerInternalName = "example/Owner",
+            MethodDescriptor = "()V",
+            IsStatic = false,
+            Instructions =
+            {
+                new InsnInstruction(OperationCode.NOP),
                 new InsnInstruction(OperationCode.RETURN)
             }
         };
 
-        var cp = MakeCp();
-        var attr = new StackFrameCalculator(body, "()V", true, cp).Compute();
-        var fullFrames = attr.Entries.OfType<FullFrame>().ToList();
+        var frame = GetFrameAtOffset(Compute(body), 1);
 
-        var frame = fullFrames.FirstOrDefault();
-        Assert.NotNull(frame);
-        Assert.Single(frame!.Stack);
-        Assert.IsType<ObjectVariableInfo>(frame.Stack[0]);
+        Assert.IsType<ObjectVariableInfo>(Assert.Single(frame.Locals));
     }
 
     [Fact]
-    public void Compute_InstanceMethod_HasUninitializedThis()
+    public void Compute_Constructor_HasUninitializedThis()
     {
         var body = new MethodBody
         {
+            MethodName = "<init>",
+            OwnerInternalName = "example/Owner",
             MethodDescriptor = "()V",
             IsStatic = false,
-            Instructions = [new InsnInstruction(OperationCode.RETURN)]
+            Instructions =
+            {
+                new InsnInstruction(OperationCode.NOP),
+                new InsnInstruction(OperationCode.RETURN)
+            }
         };
 
-        var attr = new StackFrameCalculator(body, "()V", false, MakeCp()).Compute();
-        var fullFrames = attr.Entries.OfType<FullFrame>().ToList();
+        var frame = GetFrameAtOffset(Compute(body), 1);
 
-        Assert.NotEmpty(fullFrames);
-        Assert.NotEmpty(fullFrames[0].Locals);
-        Assert.IsType<UninitializedThisVariableInfo>(fullFrames[0].Locals[0]);
+        Assert.IsType<UninitializedThisVariableInfo>(Assert.Single(frame.Locals));
     }
 
     [Fact]
-    public void Compute_ParameterTypes_ArePreserved()
+    public void Compute_ParameterTypes_UseVerificationEntriesNotLocalSlots()
     {
         var body = new MethodBody
         {
             MethodDescriptor = "(IJLjava/lang/String;)V",
             IsStatic = true,
-            Instructions = [new InsnInstruction(OperationCode.RETURN)]
+            Instructions =
+            {
+                new InsnInstruction(OperationCode.NOP),
+                new InsnInstruction(OperationCode.RETURN)
+            }
         };
 
-        var attr = new StackFrameCalculator(body, "(IJLjava/lang/String;)V", true, MakeCp()).Compute();
-        var fullFrames = attr.Entries.OfType<FullFrame>().ToList();
+        var frame = GetFrameAtOffset(Compute(body), 1);
 
-        Assert.NotEmpty(fullFrames);
-        var locals = fullFrames[0].Locals;
-        Assert.Equal(4, locals.Length);
-        Assert.IsType<IntegerVariableInfo>(locals[0]);
-        Assert.IsType<LongVariableInfo>(locals[1]);
-        Assert.IsType<TopVariableInfo>(locals[2]);
-        Assert.IsType<ObjectVariableInfo>(locals[3]);
+        Assert.Equal(3, frame.Locals.Length);
+        Assert.IsType<IntegerVariableInfo>(frame.Locals[0]);
+        Assert.IsType<LongVariableInfo>(frame.Locals[1]);
+        Assert.IsType<ObjectVariableInfo>(frame.Locals[2]);
     }
 
     [Fact]
     public void Compute_NewInstruction_PushesUninitializedType()
     {
-        var label = new Label();
-        var newInsn = new TypeInstruction(OperationCode.NEW, "java/lang/Object");
-        newInsn.Labels.Add(label);
-
         var body = new MethodBody
         {
-            MethodDescriptor = "()V",
+            MethodDescriptor = "()Ljava/lang/Object;",
             IsStatic = true,
             Instructions =
             {
-                newInsn,
-                new InsnInstruction(OperationCode.RETURN)
+                new TypeInstruction(OperationCode.NEW, "java/lang/Object"),
+                new InsnInstruction(OperationCode.ARETURN)
             }
         };
 
-        var cp = MakeCp();
-        var attr = new StackFrameCalculator(body, "()V", true, cp).Compute();
-        var fullFrames = attr.Entries.OfType<FullFrame>().ToList();
+        var frame = GetFrameAtOffset(Compute(body), 3);
 
-        var frame = fullFrames.FirstOrDefault();
-        Assert.NotNull(frame);
-        Assert.Single(frame!.Stack);
-        Assert.IsType<UninitializedVariableInfo>(frame.Stack[0]);
+        Assert.IsType<UninitializedVariableInfo>(Assert.Single(frame.Stack));
     }
 
     [Fact]
-    public void Compute_AutoResolvesOffsets_WhenManuallyConstructed()
+    public void Compute_Goto_PropagatesOnlyToTarget()
     {
+        var target = new Label("target");
+        var targetReturn = new InsnInstruction(OperationCode.IRETURN);
+        targetReturn.Labels.Add(target);
         var body = new MethodBody
         {
-            MethodDescriptor = "()V",
+            MethodDescriptor = "()I",
             IsStatic = true,
             Instructions =
             {
                 new IntInstruction(OperationCode.BIPUSH, 1),
-                new IntInstruction(OperationCode.BIPUSH, 2),
-                new InsnInstruction(OperationCode.IADD),
-                new InsnInstruction(OperationCode.RETURN)
+                new JumpInstruction(OperationCode.GOTO, new Label("target")),
+                new InsnInstruction(OperationCode.ACONST_NULL),
+                targetReturn
             }
         };
 
-        var attr = new StackFrameCalculator(body, "()V", true, MakeCp()).Compute();
-        Assert.NotEmpty(attr.Entries);
+        var attribute = Compute(body);
+        var targetFrame = GetFrameAtOffset(attribute, 5);
+
+        Assert.IsType<IntegerVariableInfo>(Assert.Single(targetFrame.Stack));
+        Assert.DoesNotContain(
+            GetFramesWithOffsets(attribute),
+            pair => pair.Offset == 4);
+    }
+
+    [Fact]
+    public void Compute_ObjectMerge_UsesConfiguredCommonSuperTypeResolver()
+    {
+        var left = new InsnInstruction(OperationCode.ACONST_NULL);
+        var merge = new InsnInstruction(OperationCode.ARETURN);
+        var body = new MethodBody
+        {
+            MethodDescriptor = "()Ljava/util/List;",
+            IsStatic = true,
+            CommonSuperTypeResolver = (_, _) => "java/util/List",
+            Instructions =
+            {
+                new InsnInstruction(OperationCode.ICONST_0),
+                new JumpInstruction(OperationCode.IFEQ, "left"),
+                new InsnInstruction(OperationCode.ACONST_NULL),
+                new TypeInstruction(OperationCode.CHECKCAST, "java/util/ArrayList"),
+                new JumpInstruction(OperationCode.GOTO, "merge"),
+                left,
+                new TypeInstruction(OperationCode.CHECKCAST, "java/util/LinkedList"),
+                merge
+            }
+        };
+        body.MarkLabel("left", left);
+        body.MarkLabel("merge", merge);
+        var constantPool = new ConstantPoolBuilder();
+
+        var attribute = new StackFrameCalculator(
+            body,
+            body.MethodDescriptor,
+            body.IsStatic,
+            constantPool).Compute();
+        var frame = GetFrameAtOffset(attribute, 15);
+        var objectInfo = Assert.IsType<ObjectVariableInfo>(Assert.Single(frame.Stack));
+        var entries = constantPool.Build();
+        var classInfo = Assert.IsType<CpClass>(entries[objectInfo.CPoolIndex.Value]);
+        var name = Assert.IsType<CpUtf8>(entries[classInfo.NameIndex.Value]).Value;
+
+        Assert.Equal("java/util/List", name);
+    }
+
+    private static StackMapTableAttribute Compute(MethodBody body)
+    {
+        return new StackFrameCalculator(
+            body,
+            body.MethodDescriptor!,
+            body.IsStatic,
+            new ConstantPoolBuilder()).Compute();
+    }
+
+    private static FullFrame GetFrameAtOffset(
+        StackMapTableAttribute attribute,
+        int expectedOffset)
+    {
+        return GetFramesWithOffsets(attribute)
+            .Single(pair => pair.Offset == expectedOffset)
+            .Frame;
+    }
+
+    private static IReadOnlyList<(int Offset, FullFrame Frame)> GetFramesWithOffsets(
+        StackMapTableAttribute attribute)
+    {
+        var result = new List<(int Offset, FullFrame Frame)>();
+        var previousOffset = -1;
+        foreach (var frame in attribute.Entries.Cast<FullFrame>())
+        {
+            var offset = previousOffset + frame.OffsetDelta.Value + 1;
+            result.Add((offset, frame));
+            previousOffset = offset;
+        }
+
+        return result;
     }
 }

@@ -10,10 +10,9 @@ public class FieldInstruction : Instruction
 
     public int FieldRefIndex { get; set; }
 
-    private bool _resolved;
-
     public FieldInstruction(OperationCode opCode, string owner, string name, string descriptor) : base(opCode)
     {
+        ValidateOpCode(opCode);
         Owner = owner;
         Name = name;
         Descriptor = descriptor;
@@ -21,19 +20,29 @@ public class FieldInstruction : Instruction
 
     public FieldInstruction(OperationCode opCode, int fieldRefIndex) : base(opCode)
     {
+        ValidateOpCode(opCode);
         FieldRefIndex = fieldRefIndex;
-        _resolved = true;
+    }
+
+    private static void ValidateOpCode(OperationCode opCode)
+    {
+        if (opCode is not (OperationCode.GETSTATIC
+            or OperationCode.PUTSTATIC
+            or OperationCode.GETFIELD
+            or OperationCode.PUTFIELD))
+        {
+            throw new ArgumentException($"OpCode {opCode} is not a field instruction.", nameof(opCode));
+        }
     }
 
     internal void Resolve(ConstantPoolBuilder cp)
     {
-        if (_resolved)
+        if (Owner is null)
         {
             return;
         }
 
-        FieldRefIndex = cp.AddFieldRef(Owner!, Name!, Descriptor!);
-        _resolved = true;
+        FieldRefIndex = cp.AddFieldRef(Owner, Name!, Descriptor!);
     }
 
     public override int GetSize() => 3;

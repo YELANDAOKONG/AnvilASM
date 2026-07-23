@@ -9,30 +9,39 @@ public class MultiANewArrayInstruction : Instruction
 
     public int TypeIndex { get; set; }
 
-    private bool _resolved;
-
     public MultiANewArrayInstruction(string type, int dimensions) : base(OperationCode.MULTIANEWARRAY)
     {
+        ValidateDimensions(dimensions);
         Type = type;
         Dimensions = dimensions;
     }
 
     public MultiANewArrayInstruction(int typeIndex, int dimensions) : base(OperationCode.MULTIANEWARRAY)
     {
+        ValidateDimensions(dimensions);
         TypeIndex = typeIndex;
         Dimensions = dimensions;
-        _resolved = true;
+    }
+
+    private static void ValidateDimensions(int dimensions)
+    {
+        if (dimensions is <= 0 or > byte.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(dimensions),
+                dimensions,
+                "Array dimensions must be between 1 and 255.");
+        }
     }
 
     internal void Resolve(ConstantPoolBuilder cp)
     {
-        if (_resolved)
+        if (Type is null)
         {
             return;
         }
 
-        TypeIndex = cp.AddClass(Type!);
-        _resolved = true;
+        TypeIndex = cp.AddClass(Type);
     }
 
     public override int GetSize() => 4;

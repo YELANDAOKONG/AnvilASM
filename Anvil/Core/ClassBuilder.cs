@@ -181,6 +181,8 @@ public class ClassBuilder
                 {
                     body = MethodBody.FromCodeAttribute(codeAttr, classFile.ConstantPool);
                     body.MethodDescriptor = descriptor;
+                    body.MethodName = name;
+                    body.OwnerInternalName = builder.Name;
                     body.IsStatic = isStatic;
                 }
                 else if (resolved is SignatureAttribute sig)
@@ -207,13 +209,9 @@ public class ClassBuilder
 
     public void Write(Stream stream)
     {
-        var cp = new ConstantPoolBuilder();
-        var oldToNew = ImportConstantPool(ClassFile.ConstantPool, cp);
-
-        var newConstantPool = cp.Build();
-
-        ClassFile.ConstantPool = newConstantPool;
-        ClassFile.ConstantPoolCount = new TUShort((ushort)newConstantPool.Length);
+        var cp = new ConstantPoolBuilder(ClassFile.ConstantPool);
+        var oldToNew = Enumerable.Range(0, ClassFile.ConstantPool.Length)
+            .ToDictionary(index => index);
 
         if (!string.IsNullOrEmpty(Name))
         {
@@ -254,13 +252,21 @@ public class ClassBuilder
 
         foreach (var entry in _methods)
         {
-            RemapMethod(entry, cp, oldToNew);
+            RemapMethod(entry, Name, cp, oldToNew);
         }
+
+        var newConstantPool = cp.Build();
+        ClassFile.ConstantPool = newConstantPool;
+        ClassFile.ConstantPoolCount = new TUShort((ushort)newConstantPool.Length);
 
         ClassFile.Write(stream);
     }
 
-    private static void RemapMethod(MethodEntry entry, ConstantPoolBuilder cp, Dictionary<int, int> oldToNew)
+    private static void RemapMethod(
+        MethodEntry entry,
+        string ownerInternalName,
+        ConstantPoolBuilder cp,
+        Dictionary<int, int> oldToNew)
     {
         entry.Info.NameIndex = new TUShort((ushort)cp.AddUtf8(entry.Name));
         entry.Info.DescriptorIndex = new TUShort((ushort)cp.AddUtf8(entry.Descriptor));
@@ -278,6 +284,11 @@ public class ClassBuilder
 
         if (entry.Body != null)
         {
+            entry.Body.MethodName = entry.Name;
+            entry.Body.MethodDescriptor = entry.Descriptor;
+            entry.Body.OwnerInternalName = ownerInternalName;
+            entry.Body.IsStatic =
+                (entry.Info.AccessFlags & Constants.Flags.MethodAccessFlags.Static) != 0;
             var codeAttr = entry.Body.ToCodeAttribute(cp);
             var bodyAttr = AttributeInfo.CreateFromAttribute("Code", codeAttr, cp);
             remappedAttrs.Add(bodyAttr);

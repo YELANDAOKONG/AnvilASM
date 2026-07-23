@@ -1,3 +1,4 @@
+using Anvil.Descriptors;
 using Anvil.Instructions.ConstantPool;
 
 namespace Anvil.Instructions;
@@ -12,24 +13,23 @@ public class MethodInstruction : Instruction
 
     public int MethodRefIndex { get; set; }
 
-    private bool _resolved;
-
     public MethodInstruction(OperationCode opCode, string owner, string name, string descriptor) : base(opCode)
     {
+        ValidateOpCode(opCode);
         Owner = owner;
         Name = name;
         Descriptor = descriptor;
 
         if (opCode == OperationCode.INVOKEINTERFACE)
         {
-            Count = 1;
+            Count = checked(DescriptorParser.ParseMethod(descriptor).ComputeSize() + 1);
         }
     }
 
     public MethodInstruction(OperationCode opCode, int methodRefIndex) : base(opCode)
     {
+        ValidateOpCode(opCode);
         MethodRefIndex = methodRefIndex;
-        _resolved = true;
 
         if (opCode == OperationCode.INVOKEINTERFACE)
         {
@@ -37,17 +37,27 @@ public class MethodInstruction : Instruction
         }
     }
 
+    private static void ValidateOpCode(OperationCode opCode)
+    {
+        if (opCode is not (OperationCode.INVOKEVIRTUAL
+            or OperationCode.INVOKESPECIAL
+            or OperationCode.INVOKESTATIC
+            or OperationCode.INVOKEINTERFACE))
+        {
+            throw new ArgumentException($"OpCode {opCode} is not a method invocation.", nameof(opCode));
+        }
+    }
+
     internal void Resolve(ConstantPoolBuilder cp)
     {
-        if (_resolved)
+        if (Owner is null)
         {
             return;
         }
 
         MethodRefIndex = OpCode == OperationCode.INVOKEINTERFACE
-            ? cp.AddInterfaceMethodRef(Owner!, Name!, Descriptor!)
-            : cp.AddMethodRef(Owner!, Name!, Descriptor!);
-        _resolved = true;
+            ? cp.AddInterfaceMethodRef(Owner, Name!, Descriptor!)
+            : cp.AddMethodRef(Owner, Name!, Descriptor!);
     }
 
     public override int GetSize() => OpCode switch

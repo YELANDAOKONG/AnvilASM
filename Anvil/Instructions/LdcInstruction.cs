@@ -8,7 +8,10 @@ public class LdcInstruction : Instruction
 
     public int ConstantIndex { get; set; }
 
+    internal string? StackDescriptor { get; set; }
+
     private bool _resolved;
+    private Func<ConstantPoolBuilder, int>? _resolver;
 
     public LdcInstruction(int value) : base(OperationCode.LDC)
     {
@@ -41,30 +44,59 @@ public class LdcInstruction : Instruction
         _resolved = true;
     }
 
+    internal static LdcInstruction CreateSymbolic(
+        OperationCode opCode,
+        string stackDescriptor,
+        Func<ConstantPoolBuilder, int> resolver)
+    {
+        return new LdcInstruction(opCode, 0)
+        {
+            StackDescriptor = stackDescriptor,
+            _resolved = false,
+            _resolver = resolver
+        };
+    }
+
     internal void Resolve(ConstantPoolBuilder cp)
     {
-        if (_resolved)
+        if (_resolver is null && Value is null)
         {
             return;
         }
 
-        ConstantIndex = Value switch
-        {
-            int v => cp.AddInteger(v),
-            float v => cp.AddFloat(v),
-            long v => cp.AddLong(v),
-            double v => cp.AddDouble(v),
-            string v => cp.AddString(v),
-            _ => throw new NotSupportedException($"LDC value type {Value?.GetType()} is not supported.")
-        };
+        ConstantIndex = _resolver?.Invoke(cp)
+            ?? Value switch
+            {
+                int value => cp.AddInteger(value),
+                float value => cp.AddFloat(value),
+                long value => cp.AddLong(value),
+                double value => cp.AddDouble(value),
+                string value => cp.AddString(value),
+                _ => throw new NotSupportedException(
+                    $"LDC value type {Value?.GetType()} is not supported.")
+            };
         _resolved = true;
     }
 
-    private OperationCode EffectiveOpCode => OpCode == OperationCode.LDC2_W
-        ? OperationCode.LDC2_W
-        : ConstantIndex > 0xFF
-            ? OperationCode.LDC_W
-            : OperationCode.LDC;
+    private OperationCode EffectiveOpCode
+    {
+        get
+        {
+            if (OpCode == OperationCode.LDC2_W)
+            {
+                return OperationCode.LDC2_W;
+            }
+
+            if (!_resolved && OpCode == OperationCode.LDC_W)
+            {
+                return OperationCode.LDC_W;
+            }
+
+            return ConstantIndex > byte.MaxValue
+                ? OperationCode.LDC_W
+                : OperationCode.LDC;
+        }
+    }
 
     public override int GetSize() => EffectiveOpCode == OperationCode.LDC ? 2 : 3;
 

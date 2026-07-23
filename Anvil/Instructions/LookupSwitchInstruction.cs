@@ -12,8 +12,25 @@ public class LookupSwitchInstruction : Instruction
         Label defaultTarget,
         List<(int Key, Label Target)> pairs) : base(OperationCode.LOOKUPSWITCH)
     {
+        ArgumentNullException.ThrowIfNull(defaultTarget);
+        ArgumentNullException.ThrowIfNull(pairs);
+
+        if (pairs.Select(pair => pair.Key).Distinct().Count() != pairs.Count)
+        {
+            throw new ArgumentException("Lookup switch keys must be unique.", nameof(pairs));
+        }
+
         DefaultTarget = defaultTarget;
-        Pairs = pairs;
+        Pairs = pairs.OrderBy(pair => pair.Key).ToList();
+    }
+
+    public LookupSwitchInstruction(
+        string defaultTarget,
+        IEnumerable<(int Key, string Target)> pairs)
+        : this(
+            new Label(defaultTarget),
+            pairs.Select(pair => (pair.Key, new Label(pair.Target))).ToList())
+    {
     }
 
     public override int GetSize()

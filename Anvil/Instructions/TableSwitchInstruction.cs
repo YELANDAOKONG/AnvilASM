@@ -16,10 +16,32 @@ public class TableSwitchInstruction : Instruction
         Label defaultTarget,
         List<Label> targets) : base(OperationCode.TABLESWITCH)
     {
+        ArgumentNullException.ThrowIfNull(defaultTarget);
+        ArgumentNullException.ThrowIfNull(targets);
+
+        if (high < low)
+        {
+            throw new ArgumentOutOfRangeException(nameof(high), "High must be greater than or equal to low.");
+        }
+
+        if ((long)high - low + 1 != targets.Count)
+        {
+            throw new ArgumentException("Target count must equal high - low + 1.", nameof(targets));
+        }
+
         Low = low;
         High = high;
         DefaultTarget = defaultTarget;
         Targets = targets;
+    }
+
+    public TableSwitchInstruction(
+        int low,
+        int high,
+        string defaultTarget,
+        IEnumerable<string> targets)
+        : this(low, high, new Label(defaultTarget), targets.Select(name => new Label(name)).ToList())
+    {
     }
 
     public override int GetSize()

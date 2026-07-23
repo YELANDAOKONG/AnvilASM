@@ -2,10 +2,36 @@ namespace Anvil.Instructions;
 
 public class IntInstruction : Instruction
 {
+    private const int MinArrayTypeCode = 4;
+    private const int MaxArrayTypeCode = 11;
+
     public int Value { get; set; }
 
     public IntInstruction(OperationCode opCode, int value) : base(opCode)
     {
+        if (opCode is not (OperationCode.BIPUSH or OperationCode.SIPUSH or OperationCode.NEWARRAY))
+        {
+            throw new ArgumentException($"OpCode {opCode} is not valid for IntInstruction.", nameof(opCode));
+        }
+
+        if (opCode is OperationCode.BIPUSH or OperationCode.SIPUSH
+            && value is < short.MinValue or > short.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(value),
+                value,
+                "Integer push value must fit in a signed 16-bit value.");
+        }
+
+        if (opCode == OperationCode.NEWARRAY
+            && value is < MinArrayTypeCode or > MaxArrayTypeCode)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(value),
+                value,
+                "NEWARRAY type code must be between 4 and 11.");
+        }
+
         Value = value;
     }
 

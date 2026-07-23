@@ -7,6 +7,22 @@ public class IincInstruction : Instruction
 
     public IincInstruction(int varIndex, int increment) : base(OperationCode.IINC)
     {
+        if (varIndex < 0 || varIndex > ushort.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(varIndex),
+                varIndex,
+                "Local variable index must be between 0 and 65535.");
+        }
+
+        if (increment < short.MinValue || increment > short.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(increment),
+                increment,
+                "Increment must fit in a signed 16-bit value.");
+        }
+
         VarIndex = varIndex;
         Increment = increment;
     }
@@ -15,18 +31,7 @@ public class IincInstruction : Instruction
     {
         get
         {
-            if (VarIndex > 0xFFFF)
-            {
-                throw new ArgumentOutOfRangeException(nameof(VarIndex), $"VarIndex {VarIndex} exceeds maximum 65535.");
-            }
-
-            if (Increment < short.MinValue || Increment > short.MaxValue)
-            {
-                throw new ArgumentOutOfRangeException(nameof(Increment),
-                    $"Increment {Increment} does not fit in signed 16-bit.");
-            }
-
-            return VarIndex > 0xFF || Increment > 0x7F || Increment < -0x80;
+            return VarIndex > byte.MaxValue || Increment > sbyte.MaxValue || Increment < sbyte.MinValue;
         }
     }
 

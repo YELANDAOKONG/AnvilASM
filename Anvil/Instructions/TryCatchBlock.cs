@@ -9,10 +9,15 @@ public class TryCatchBlock
 
     public TryCatchBlock(Label start, Label end, Label handler, string? catchType = null)
     {
-        Start = start;
-        End = end;
-        Handler = handler;
+        Start = start ?? throw new ArgumentNullException(nameof(start));
+        End = end ?? throw new ArgumentNullException(nameof(end));
+        Handler = handler ?? throw new ArgumentNullException(nameof(handler));
         CatchType = catchType;
+    }
+
+    public TryCatchBlock(string start, string end, string handler, string? catchType = null)
+        : this(new Label(start), new Label(end), new Label(handler), catchType)
+    {
     }
 
     public override string ToString()

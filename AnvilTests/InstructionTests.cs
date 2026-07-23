@@ -169,7 +169,9 @@ public class InstructionTests
             MaxLocals = 0,
             Instructions =
             {
+                new IntInstruction(OperationCode.BIPUSH, -1),
                 new MethodInstruction(OperationCode.INVOKESTATIC, "java/lang/Math", "abs", "(I)I"),
+                new InsnInstruction(OperationCode.POP),
                 new InsnInstruction(OperationCode.RETURN)
             }
         };

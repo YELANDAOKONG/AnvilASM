@@ -13,47 +13,46 @@ internal class FrameState
         return clone;
     }
 
-    public Effect Push(JvmType type)
+    public void Push(JvmType type)
     {
         Stack.Add(type);
-        return Effect.Continue;
     }
 
-    public Effect PushWide(JvmType type)
+    public JvmType Peek()
     {
-        Stack.Add(type);
-        Stack.Add(JvmType.Top);
-        return Effect.Continue;
-    }
-
-    public Effect Pop()
-    {
-        if (Stack.Count > 0)
+        if (Stack.Count == 0)
         {
-            Stack.RemoveAt(Stack.Count - 1);
+            throw new InvalidOperationException("Operand stack underflow.");
         }
 
-        return Effect.Continue;
+        return Stack[^1];
     }
 
-    public Effect PopN(int n)
+    public JvmType Pop()
     {
-        for (var i = 0; i < n && Stack.Count > 0; i++)
+        if (Stack.Count == 0)
         {
-            Stack.RemoveAt(Stack.Count - 1);
+            throw new InvalidOperationException("Operand stack underflow.");
         }
 
-        return Effect.Continue;
+        var value = Stack[^1];
+        Stack.RemoveAt(Stack.Count - 1);
+        return value;
     }
 
-    public Effect PopWide()
+    public void Pop(int count)
     {
-        return PopN(2);
-    }
+        if (count < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
 
-    public Effect PopWide2()
-    {
-        return PopN(4);
+        if (Stack.Count < count)
+        {
+            throw new InvalidOperationException("Operand stack underflow.");
+        }
+
+        Stack.RemoveRange(Stack.Count - count, count);
     }
 
     public void SetLocal(int index, JvmType type)
@@ -64,5 +63,24 @@ internal class FrameState
         }
 
         Locals[index] = type;
+    }
+
+    public void Replace(JvmType oldType, JvmType newType)
+    {
+        for (var i = 0; i < Locals.Count; i++)
+        {
+            if (Locals[i].Equals(oldType))
+            {
+                Locals[i] = newType;
+            }
+        }
+
+        for (var i = 0; i < Stack.Count; i++)
+        {
+            if (Stack[i].Equals(oldType))
+            {
+                Stack[i] = newType;
+            }
+        }
     }
 }

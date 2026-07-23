@@ -4,7 +4,7 @@ public class Label
 {
     private static int _nextId;
 
-    public string? Name { get; }
+    public string Name { get; }
 
     internal int Id { get; }
 
@@ -13,8 +13,13 @@ public class Label
     public Label(string? name = null)
     {
         Id = Interlocked.Increment(ref _nextId);
-        Name = name;
+        Name = name ?? $"L{Id:X4}";
+
+        if (string.IsNullOrWhiteSpace(Name))
+        {
+            throw new ArgumentException("Label name cannot be empty or whitespace.", nameof(name));
+        }
     }
 
-    public override string ToString() => Name ?? $"L{Id:X4}";
+    public override string ToString() => Name;
 }

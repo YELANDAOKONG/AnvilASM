@@ -5,15 +5,13 @@ namespace Anvil.Instructions;
 public class InvokeDynamicInstruction : Instruction
 {
     public int BootstrapMethodAttrIndex { get; set; }
+    public int ConstantIndex { get; private set; }
     public string? Name { get; set; }
     public string? Descriptor { get; set; }
 
-    private bool _resolved;
-
     public InvokeDynamicInstruction(int bootstrapMethodAttrIndex) : base(OperationCode.INVOKEDYNAMIC)
     {
-        BootstrapMethodAttrIndex = bootstrapMethodAttrIndex;
-        _resolved = true;
+        ConstantIndex = bootstrapMethodAttrIndex;
     }
 
     public InvokeDynamicInstruction(int bootstrapMethodAttrIndex, string name, string descriptor) : base(OperationCode.INVOKEDYNAMIC)
@@ -25,13 +23,12 @@ public class InvokeDynamicInstruction : Instruction
 
     internal void Resolve(ConstantPoolBuilder cp)
     {
-        if (_resolved)
+        if (Name is null)
         {
             return;
         }
 
-        BootstrapMethodAttrIndex = cp.AddInvokeDynamic(BootstrapMethodAttrIndex, Name!, Descriptor!);
-        _resolved = true;
+        ConstantIndex = cp.AddInvokeDynamic(BootstrapMethodAttrIndex, Name, Descriptor!);
     }
 
     public override int GetSize() => 5;
@@ -39,11 +36,11 @@ public class InvokeDynamicInstruction : Instruction
     public override void Write(Stream stream)
     {
         stream.WriteByte((byte)OperationCode.INVOKEDYNAMIC);
-        stream.WriteByte((byte)((BootstrapMethodAttrIndex >> 8) & 0xFF));
-        stream.WriteByte((byte)(BootstrapMethodAttrIndex & 0xFF));
+        stream.WriteByte((byte)((ConstantIndex >> 8) & 0xFF));
+        stream.WriteByte((byte)(ConstantIndex & 0xFF));
         stream.WriteByte(0);
         stream.WriteByte(0);
     }
 
-    public override string ToString() => $"{OpCode} #{BootstrapMethodAttrIndex}";
+    public override string ToString() => $"{OpCode} #{ConstantIndex}";
 }

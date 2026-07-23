@@ -1,5 +1,4 @@
 using Anvil.Descriptors;
-using Anvil.Instructions;
 using Anvil.Instructions.ConstantPool;
 using Anvil.Structures.Attributes;
 using Anvil.Structures.Attributes.StackMap;
@@ -12,829 +11,233 @@ namespace Anvil.Instructions.StackMap;
 public class StackFrameCalculator
 {
     private readonly MethodBody _body;
-    private readonly FrameState _initial;
+    private readonly ConstantPoolBuilder _constantPool;
+    private readonly FrameState _initialState;
     private readonly Dictionary<int, FrameState> _frames = new();
-    private readonly ConstantPoolBuilder _cp;
+    private readonly Dictionary<string, JvmObject> _handlerTypes = new(StringComparer.Ordinal);
 
-    public StackFrameCalculator(MethodBody body, string methodDescriptor, bool isStatic, ConstantPoolBuilder cp)
+    public StackFrameCalculator(
+        MethodBody body,
+        string methodDescriptor,
+        bool isStatic,
+        ConstantPoolBuilder constantPool)
     {
-        _body = body;
-        _cp = cp;
-        _initial = InitLocals(methodDescriptor, isStatic);
+        _body = body ?? throw new ArgumentNullException(nameof(body));
+        _constantPool = constantPool ?? throw new ArgumentNullException(nameof(constantPool));
+        _initialState = CreateInitialState(methodDescriptor, isStatic);
     }
 
     public StackMapTableAttribute Compute()
     {
-        if (_body.Instructions.Any(insn => insn.Offset == null))
+        _body.ResolveLabels();
+        _frames.Clear();
+        _handlerTypes.Clear();
+
+        var instructionIndex = BuildInstructionIndex();
+        if (_body.Instructions.Count == 0)
         {
-            _body.ResolveLabels();
+            throw new InvalidOperationException("Cannot compute stack frames for an empty method body.");
         }
 
-        // Collect offsets of instructions that carry Labels; frames at these offsets
-        // capture the state *after* the instruction executes.
-        var labeledTargets = new HashSet<int>();
-        foreach (var insn in _body.Instructions)
-        {
-            if (insn.Labels.Count > 0 && insn.Offset.HasValue)
-            {
-                labeledTargets.Add(insn.Offset.Value);
-            }
-        }
-
-        var targets = ComputeTargets(labeledTargets);
         var worklist = new Queue<int>();
-        var iteration = 0;
-        const int maxIterations = 2000;
+        MergeFrame(0, _initialState, worklist);
 
-        SetFrame(0, _initial);
-        worklist.Enqueue(0);
+        while (worklist.TryDequeue(out var pc))
+        {
+            var index = instructionIndex[pc];
+            var instruction = _body.Instructions[index];
+            var state = _frames[pc].Clone();
 
+            PropagateExceptionHandlers(pc, state, worklist);
+            ApplyEffect(instruction, state);
+
+            foreach (var successor in GetSuccessors(instruction, index))
+            {
+                MergeFrame(successor, state, worklist);
+            }
+        }
+
+        return new StackMapTableAttribute(BuildFrames());
+    }
+
+    private StackMapFrame[] BuildFrames()
+    {
+        var frames = new List<StackMapFrame>();
+        var previousPc = -1;
+
+        foreach (var (pc, state) in _frames.OrderBy(pair => pair.Key))
+        {
+            if (pc == 0)
+            {
+                continue;
+            }
+
+            var offsetDelta = pc - previousPc - 1;
+            frames.Add(BuildFullFrame(offsetDelta, state));
+            previousPc = pc;
+        }
+
+        return frames.ToArray();
+    }
+
+    private IEnumerable<int> GetSuccessors(Instruction instruction, int index)
+    {
+        var nextOffset = index + 1 < _body.Instructions.Count
+            ? _body.Instructions[index + 1].Offset
+            : null;
+
+        switch (instruction)
+        {
+            case JumpInstruction jump
+                when jump.OpCode is OperationCode.GOTO or OperationCode.GOTO_W:
+                yield return GetResolvedOffset(jump.Target);
+                yield break;
+
+            case JumpInstruction jump
+                when jump.OpCode is OperationCode.JSR or OperationCode.JSR_W:
+                throw new NotSupportedException(
+                    "Stack map calculation does not support legacy JSR/RET subroutines.");
+
+            case JumpInstruction jump:
+                yield return GetResolvedOffset(jump.Target);
+                if (nextOffset.HasValue)
+                {
+                    yield return nextOffset.Value;
+                }
+
+                yield break;
+
+            case TableSwitchInstruction tableSwitch:
+                yield return GetResolvedOffset(tableSwitch.DefaultTarget);
+                foreach (var target in tableSwitch.Targets)
+                {
+                    yield return GetResolvedOffset(target);
+                }
+
+                yield break;
+
+            case LookupSwitchInstruction lookupSwitch:
+                yield return GetResolvedOffset(lookupSwitch.DefaultTarget);
+                foreach (var (_, target) in lookupSwitch.Pairs)
+                {
+                    yield return GetResolvedOffset(target);
+                }
+
+                yield break;
+        }
+
+        if (instruction.OpCode is OperationCode.IRETURN
+            or OperationCode.LRETURN
+            or OperationCode.FRETURN
+            or OperationCode.DRETURN
+            or OperationCode.ARETURN
+            or OperationCode.RETURN
+            or OperationCode.ATHROW)
+        {
+            yield break;
+        }
+
+        if (instruction.OpCode == OperationCode.RET)
+        {
+            throw new NotSupportedException(
+                "Stack map calculation does not support legacy JSR/RET subroutines.");
+        }
+
+        if (nextOffset.HasValue)
+        {
+            yield return nextOffset.Value;
+        }
+    }
+
+    private void PropagateExceptionHandlers(int pc, FrameState state, Queue<int> worklist)
+    {
         foreach (var block in _body.TryCatchBlocks)
         {
-            var handlerState = _initial.Clone();
-            var catchType = block.CatchType ?? "java/lang/Throwable";
+            var startPc = GetResolvedOffset(block.Start);
+            var endPc = GetResolvedOffset(block.End);
+            if (pc < startPc || pc >= endPc)
+            {
+                continue;
+            }
+
+            var handlerState = state.Clone();
             handlerState.Stack.Clear();
-            handlerState.Stack.Add(new JvmObject(catchType));
-            SetFrame(block.Handler.Offset!.Value, handlerState);
-            worklist.Enqueue(block.Handler.Offset!.Value);
-        }
-
-        var insnList = _body.Instructions;
-        var insnIndex = BuildInstructionIndex();
-
-        while (worklist.Count > 0 && iteration++ < maxIterations)
-        {
-            var pc = worklist.Dequeue();
-            if (!insnIndex.TryGetValue(pc, out var idx))
-            {
-                continue;
-            }
-
-            if (!_frames.TryGetValue(pc, out var state))
-            {
-                continue;
-            }
-
-            state = state.Clone();
-            var i = idx;
-            var keepGoing = true;
-
-            while (keepGoing && i < insnList.Count)
-            {
-                var insn = insnList[i];
-                var offset = insn.Offset!.Value;
-
-                if (offset != pc && targets.Contains(offset))
-                {
-                    if (_frames.ContainsKey(offset))
-                    {
-                        if (MergeInto(_frames[offset], state))
-                        {
-                            worklist.Enqueue(offset);
-                        }
-                    }
-                    else
-                    {
-                        // Record the pre-instruction state so this offset can be
-                        // re-processed from the worklist.
-                        _frames[offset] = state.Clone();
-                        worklist.Enqueue(offset);
-                    }
-
-                    keepGoing = false;
-                    break;
-                }
-
-                var result = ApplyEffect(insn, state);
-                if (!result.KeepGoing)
-                {
-                    keepGoing = false;
-                }
-
-                i++;
-            }
-        }
-
-        var entries = new List<StackMapFrame>();
-        var sortedTargets = targets.Where(t => _frames.ContainsKey(t)).OrderBy(t => t).ToList();
-        var prevPc = -1;
-
-        foreach (var targetPc in sortedTargets)
-        {
-            FrameState frameState;
-            if (labeledTargets.Contains(targetPc) && insnIndex.TryGetValue(targetPc, out var labelInsnIdx))
-            {
-                // The stored frame is the pre-instruction state; apply the instruction's
-                // effect to produce the post-instruction state for the output frame.
-                frameState = _frames[targetPc].Clone();
-                ApplyEffect(insnList[labelInsnIdx], frameState);
-            }
-            else
-            {
-                frameState = _frames[targetPc];
-            }
-
-            var delta = prevPc < 0 ? targetPc : targetPc - prevPc;
-            prevPc = targetPc;
-            entries.Add(BuildFullFrame(delta, frameState));
-        }
-
-        return new StackMapTableAttribute(entries.ToArray());
-    }
-
-    private HashSet<int> ComputeTargets(HashSet<int> labeledOffsets)
-    {
-        var targets = new HashSet<int>();
-
-        // Include all offsets that carry user-attached Labels.
-        targets.UnionWith(labeledOffsets);
-
-        foreach (var insn in _body.Instructions)
-        {
-            switch (insn)
-            {
-                case JumpInstruction ji:
-                    targets.Add(ji.Target.Offset!.Value);
-                    break;
-                case TableSwitchInstruction ts:
-                    targets.Add(ts.DefaultTarget.Offset!.Value);
-                    foreach (var t in ts.Targets) targets.Add(t.Offset!.Value);
-                    break;
-                case LookupSwitchInstruction ls:
-                    targets.Add(ls.DefaultTarget.Offset!.Value);
-                    foreach (var (_, label) in ls.Pairs) targets.Add(label.Offset!.Value);
-                    break;
-            }
-        }
-
-        foreach (var block in _body.TryCatchBlocks)
-        {
-            targets.Add(block.Start.Offset!.Value);
-            targets.Add(block.Handler.Offset!.Value);
-        }
-
-        // When nothing else was targeted, always include offset 0 so that the
-        // initial frame (representing the method entry state) is present in the
-        // StackMapTable attribute output.
-        if (targets.Count == 0)
-        {
-            targets.Add(0);
-        }
-
-        return targets;
-    }
-
-    private static Effect ApplyEffect(Instruction insn, FrameState state)
-    {
-        var op = insn.OpCode;
-
-        switch (op)
-        {
-            // No-op
-            case OperationCode.NOP:
-                return Effect.Continue;
-
-            // Constants
-            case OperationCode.ACONST_NULL:
-                return state.Push(JvmType.Null);
-            case OperationCode.ICONST_M1:
-            case >= OperationCode.ICONST_0 and <= OperationCode.ICONST_5:
-            case OperationCode.BIPUSH:
-            case OperationCode.SIPUSH:
-                return state.Push(JvmType.Int);
-            case OperationCode.LCONST_0:
-            case OperationCode.LCONST_1:
-                return state.PushWide(JvmType.Long);
-            case OperationCode.FCONST_0:
-            case OperationCode.FCONST_1:
-            case OperationCode.FCONST_2:
-                return state.Push(JvmType.Float);
-            case OperationCode.DCONST_0:
-            case OperationCode.DCONST_1:
-                return state.PushWide(JvmType.Double);
-
-            // LDC
-            case OperationCode.LDC:
-            case OperationCode.LDC_W:
-            {
-                var ldc = (LdcInstruction)insn;
-                var type = ldc.Value switch
-                {
-                    string => new JvmObject("java/lang/String"),
-                    int => JvmType.Int,
-                    float => JvmType.Float,
-                    null => JvmType.Top,
-                    _ => new JvmObject("java/lang/Class")
-                };
-                return state.Push(type);
-            }
-            case OperationCode.LDC2_W:
-            {
-                var ldc = (LdcInstruction)insn;
-                var type = ldc.Value is double ? JvmType.Double : JvmType.Long;
-                return state.PushWide(type);
-            }
-
-            // Loads
-            case OperationCode.ILOAD:
-            case >= OperationCode.ILOAD_0 and <= OperationCode.ILOAD_3:
-                return state.Push(JvmType.Int);
-            case OperationCode.LLOAD:
-            case >= OperationCode.LLOAD_0 and <= OperationCode.LLOAD_3:
-                return state.PushWide(JvmType.Long);
-            case OperationCode.FLOAD:
-            case >= OperationCode.FLOAD_0 and <= OperationCode.FLOAD_3:
-                return state.Push(JvmType.Float);
-            case OperationCode.DLOAD:
-            case >= OperationCode.DLOAD_0 and <= OperationCode.DLOAD_3:
-                return state.PushWide(JvmType.Double);
-            case OperationCode.ALOAD:
-            case >= OperationCode.ALOAD_0 and <= OperationCode.ALOAD_3:
-            {
-                var idx = GetVarIndex(insn);
-                var local = idx < state.Locals.Count ? state.Locals[idx] : JvmType.Top;
-                return state.Push(local);
-            }
-
-            // Array loads
-            case OperationCode.IALOAD:
-                return state.PopN(2) && state.Push(JvmType.Int);
-            case OperationCode.LALOAD:
-                return state.PopN(2) && state.PushWide(JvmType.Long);
-            case OperationCode.FALOAD:
-                return state.PopN(2) && state.Push(JvmType.Float);
-            case OperationCode.DALOAD:
-                return state.PopN(2) && state.PushWide(JvmType.Double);
-            case OperationCode.AALOAD:
-                return state.PopN(2) && state.Push(JvmType.Top);
-            case OperationCode.BALOAD:
-            case OperationCode.CALOAD:
-            case OperationCode.SALOAD:
-                return state.PopN(2) && state.Push(JvmType.Int);
-
-            // Stores
-            case OperationCode.ISTORE:
-            case >= OperationCode.ISTORE_0 and <= OperationCode.ISTORE_3:
-            {
-                var idx = GetStoreVarIndex(insn);
-                state.Pop();
-                state.SetLocal(idx, JvmType.Int);
-                return Effect.Continue;
-            }
-            case OperationCode.LSTORE:
-            case >= OperationCode.LSTORE_0 and <= OperationCode.LSTORE_3:
-            {
-                var idx = GetStoreVarIndex(insn);
-                state.PopWide();
-                state.SetLocal(idx, JvmType.Long);
-                state.SetLocal(idx + 1, JvmType.Top);
-                return Effect.Continue;
-            }
-            case OperationCode.FSTORE:
-            case >= OperationCode.FSTORE_0 and <= OperationCode.FSTORE_3:
-            {
-                var idx = GetStoreVarIndex(insn);
-                state.Pop();
-                state.SetLocal(idx, JvmType.Float);
-                return Effect.Continue;
-            }
-            case OperationCode.DSTORE:
-            case >= OperationCode.DSTORE_0 and <= OperationCode.DSTORE_3:
-            {
-                var idx = GetStoreVarIndex(insn);
-                state.PopWide();
-                state.SetLocal(idx, JvmType.Double);
-                state.SetLocal(idx + 1, JvmType.Top);
-                return Effect.Continue;
-            }
-            case OperationCode.ASTORE:
-            case >= OperationCode.ASTORE_0 and <= OperationCode.ASTORE_3:
-            {
-                var idx = GetStoreVarIndex(insn);
-                var stackType = state.Stack.Count > 0 ? state.Stack[^1] : JvmType.Top;
-                state.Pop();
-                state.SetLocal(idx, stackType);
-                return Effect.Continue;
-            }
-
-            // Array stores
-            case OperationCode.IASTORE:
-            case OperationCode.FASTORE:
-            case OperationCode.AASTORE:
-            case OperationCode.BASTORE:
-            case OperationCode.CASTORE:
-            case OperationCode.SASTORE:
-                return state.PopN(3);
-            case OperationCode.LASTORE:
-            case OperationCode.DASTORE:
-                return state.PopN(4);
-
-            // Stack ops
-            case OperationCode.POP:
-                return state.Pop();
-            case OperationCode.POP2:
-                return state.PopN(2);
-            case OperationCode.DUP:
-                if (state.Stack.Count == 0) return Effect.Continue;
-                return state.Push(state.Stack[^1]);
-            case OperationCode.DUP_X1:
-                return ApplyDupX1(state);
-            case OperationCode.DUP_X2:
-                return ApplyDupX2(state);
-            case OperationCode.DUP2:
-                return ApplyDup2(state);
-            case OperationCode.DUP2_X1:
-                return ApplyDup2X1(state);
-            case OperationCode.DUP2_X2:
-                return ApplyDup2X2(state);
-            case OperationCode.SWAP:
-                if (state.Stack.Count < 2) return Effect.Continue;
-                var top = state.Stack[^1]; state.Stack.RemoveAt(state.Stack.Count - 1);
-                var second = state.Stack[^1]; state.Stack.RemoveAt(state.Stack.Count - 1);
-                state.Stack.Add(top);
-                state.Stack.Add(second);
-                return Effect.Continue;
-
-            // Arithmetic
-            case OperationCode.IADD: case OperationCode.ISUB: case OperationCode.IMUL:
-            case OperationCode.IDIV: case OperationCode.IREM:
-            case OperationCode.ISHL: case OperationCode.ISHR: case OperationCode.IUSHR:
-            case OperationCode.IAND: case OperationCode.IOR: case OperationCode.IXOR:
-                return state.PopN(2) && state.Push(JvmType.Int);
-            case OperationCode.LADD: case OperationCode.LSUB: case OperationCode.LMUL:
-            case OperationCode.LDIV: case OperationCode.LREM:
-            case OperationCode.LSHL: case OperationCode.LSHR: case OperationCode.LUSHR:
-            case OperationCode.LAND: case OperationCode.LOR: case OperationCode.LXOR:
-                return state.PopWide2() && state.PushWide(JvmType.Long);
-            case OperationCode.FADD: case OperationCode.FSUB: case OperationCode.FMUL:
-            case OperationCode.FDIV: case OperationCode.FREM:
-                return state.PopN(2) && state.Push(JvmType.Float);
-            case OperationCode.DADD: case OperationCode.DSUB: case OperationCode.DMUL:
-            case OperationCode.DDIV: case OperationCode.DREM:
-                return state.PopWide2() && state.PushWide(JvmType.Double);
-            case OperationCode.INEG:
-                return state.Pop() && state.Push(JvmType.Int);
-            case OperationCode.LNEG:
-                return state.PopWide() && state.PushWide(JvmType.Long);
-            case OperationCode.FNEG:
-                return state.Pop() && state.Push(JvmType.Float);
-            case OperationCode.DNEG:
-                return state.PopWide() && state.PushWide(JvmType.Double);
-
-            case OperationCode.IINC:
-                return Effect.Continue;
-
-            // Conversions
-            case OperationCode.I2L: return state.Pop() && state.PushWide(JvmType.Long);
-            case OperationCode.I2F: return state.Pop() && state.Push(JvmType.Float);
-            case OperationCode.I2D: return state.Pop() && state.PushWide(JvmType.Double);
-            case OperationCode.L2I: return state.PopWide() && state.Push(JvmType.Int);
-            case OperationCode.L2F: return state.PopWide() && state.Push(JvmType.Float);
-            case OperationCode.L2D: return state.PopWide() && state.PushWide(JvmType.Double);
-            case OperationCode.F2I: return state.Pop() && state.Push(JvmType.Int);
-            case OperationCode.F2L: return state.Pop() && state.PushWide(JvmType.Long);
-            case OperationCode.F2D: return state.Pop() && state.PushWide(JvmType.Double);
-            case OperationCode.D2I: return state.PopWide() && state.Push(JvmType.Int);
-            case OperationCode.D2L: return state.PopWide() && state.PushWide(JvmType.Long);
-            case OperationCode.D2F: return state.PopWide() && state.Push(JvmType.Float);
-            case OperationCode.I2B: case OperationCode.I2C: case OperationCode.I2S:
-                return state.Pop() && state.Push(JvmType.Int);
-
-            // Comparisons
-            case OperationCode.LCMP:
-                return state.PopWide2() && state.Push(JvmType.Int);
-            case OperationCode.FCMPL: case OperationCode.FCMPG:
-            case OperationCode.DCMPL: case OperationCode.DCMPG:
-                return state.PopN(2) && state.Push(JvmType.Int);
-
-            // Branches
-            case OperationCode.IFEQ: case OperationCode.IFNE:
-            case OperationCode.IFLT: case OperationCode.IFGE:
-            case OperationCode.IFGT: case OperationCode.IFLE:
-            case OperationCode.IFNULL: case OperationCode.IFNONNULL:
-                state.Pop();
-                return Effect.Continue;
-            case OperationCode.IF_ICMPEQ: case OperationCode.IF_ICMPNE:
-            case OperationCode.IF_ICMPLT: case OperationCode.IF_ICMPGE:
-            case OperationCode.IF_ICMPGT: case OperationCode.IF_ICMPLE:
-            case OperationCode.IF_ACMPEQ: case OperationCode.IF_ACMPNE:
-                state.PopN(2);
-                return Effect.Continue;
-            case OperationCode.GOTO:
-            case OperationCode.GOTO_W:
-                return Effect.Stop;
-            case OperationCode.JSR:
-            case OperationCode.JSR_W:
-                return Effect.Continue;
-            case OperationCode.RET:
-                return Effect.Continue;
-            case OperationCode.TABLESWITCH:
-            case OperationCode.LOOKUPSWITCH:
-                state.Pop();
-                return Effect.Stop;
-
-            // Returns
-            case OperationCode.IRETURN: case OperationCode.FRETURN:
-            case OperationCode.ARETURN: case OperationCode.LRETURN:
-            case OperationCode.DRETURN: case OperationCode.RETURN:
-                return Effect.Stop;
-
-            // Field
-            case OperationCode.GETSTATIC:
-            {
-                var fi = (FieldInstruction)insn;
-                var type = FieldTypeToJvm(fi.Descriptor);
-                return state.Push(type);
-            }
-            case OperationCode.PUTSTATIC:
-            {
-                var fi = (FieldInstruction)insn;
-                return IsWideDesc(fi.Descriptor) ? state.PopWide() : state.Pop();
-            }
-            case OperationCode.GETFIELD:
-                return state.Pop() && state.Push(JvmType.Top);
-            case OperationCode.PUTFIELD:
-                return state.PopN(2);
-
-            // Method invocation
-            case OperationCode.INVOKEVIRTUAL: case OperationCode.INVOKESPECIAL:
-            case OperationCode.INVOKESTATIC: case OperationCode.INVOKEINTERFACE:
-            {
-                var mi = (MethodInstruction)insn;
-                PopArgs(state, mi.Descriptor ?? "()V");
-                return PushReturn(state, mi.Descriptor ?? "()V");
-            }
-            case OperationCode.INVOKEDYNAMIC:
-                return state.Push(JvmType.Top);
-
-            // Object/Array
-            case OperationCode.NEW:
-            {
-                return state.Push(new JvmUninitialized(insn.Offset!.Value));
-            }
-            case OperationCode.NEWARRAY:
-                return state.Pop() && state.Push(new JvmObject("[I"));
-            case OperationCode.ANEWARRAY:
-            {
-                var ti = (TypeInstruction)insn;
-                var arrayType = ti.Type != null ? $"[L{ti.Type};" : "[Ljava/lang/Object;";
-                return state.Pop() && state.Push(new JvmObject(arrayType));
-            }
-            case OperationCode.ARRAYLENGTH:
-                return state.Pop() && state.Push(JvmType.Int);
-            case OperationCode.ATHROW:
-                return state.Pop() && Effect.Stop;
-            case OperationCode.CHECKCAST:
-                return Effect.Continue;
-            case OperationCode.INSTANCEOF:
-                return state.Pop() && state.Push(JvmType.Int);
-            case OperationCode.MONITORENTER: case OperationCode.MONITOREXIT:
-                return state.Pop();
-            case OperationCode.MULTIANEWARRAY:
-            {
-                var mana = (MultiANewArrayInstruction)insn;
-                for (var d = 0; d < mana.Dimensions; d++) state.Pop();
-                return state.Push(new JvmObject(mana.Type ?? "Ljava/lang/Object;"));
-            }
-
-            default:
-                return Effect.Continue;
+            handlerState.Push(GetHandlerType(block.Handler));
+            MergeFrame(GetResolvedOffset(block.Handler), handlerState, worklist);
         }
     }
 
-    private static Effect ApplyDupX1(FrameState state)
+    private JvmObject GetHandlerType(Label handler)
     {
-        if (state.Stack.Count < 2) return Effect.Continue;
-        var v1 = PopLast(state);
-        var v2 = PopLast(state);
-        state.Stack.Add(v1);
-        state.Stack.Add(v2);
-        state.Stack.Add(v1);
-        return Effect.Continue;
-    }
-
-    private static Effect ApplyDupX2(FrameState state)
-    {
-        if (state.Stack.Count >= 2 && IsStackTopWide(state))
+        if (_handlerTypes.TryGetValue(handler.Name, out var type))
         {
-            var v1w = PopLast(state);
-            var v2w = PopLast(state);
-            state.Stack.Add(v1w);
-            state.Stack.Add(v2w);
-            state.Stack.Add(v1w);
-            return Effect.Continue;
+            return type;
         }
 
-        if (state.Stack.Count >= 3)
+        var catchTypes = _body.TryCatchBlocks
+            .Where(block => block.Handler.Name == handler.Name)
+            .Select(block => block.CatchType)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        string typeName;
+        if (catchTypes.Count == 1 && catchTypes[0] is not null)
         {
-            var v1 = PopLast(state);
-            var v2 = PopLast(state);
-            var v3 = PopLast(state);
-            state.Stack.Add(v1);
-            state.Stack.Add(v3);
-            state.Stack.Add(v2);
-            state.Stack.Add(v1);
+            typeName = catchTypes[0]!;
+        }
+        else if (catchTypes.Any(catchType => catchType is null)
+            || catchTypes.Any(catchType =>
+                catchType == "java/lang/Throwable"
+                || catchType?.EndsWith("Error", StringComparison.Ordinal) == true))
+        {
+            typeName = "java/lang/Throwable";
+        }
+        else
+        {
+            // Multi-catch alternatives are disjoint subclasses. Java source multi-catch
+            // types conventionally meet at Exception; Error alternatives meet at Throwable.
+            typeName = "java/lang/Exception";
         }
 
-        return Effect.Continue;
+        type = new JvmObject(typeName);
+        _handlerTypes[handler.Name] = type;
+        return type;
     }
 
-    private static Effect ApplyDup2(FrameState state)
+    private void MergeFrame(int pc, FrameState incoming, Queue<int> worklist)
     {
-        if (state.Stack.Count >= 1 && IsStackTopWide(state))
+        if (!_frames.TryGetValue(pc, out var current))
         {
-            var v1 = PopLast(state);
-            var v2 = PopLast(state);
-            state.Stack.Add(v2);
-            state.Stack.Add(v1);
-            state.Stack.Add(v2);
-            state.Stack.Add(v1);
-            return Effect.Continue;
+            _frames[pc] = incoming.Clone();
+            worklist.Enqueue(pc);
+            return;
         }
 
-        if (state.Stack.Count >= 2)
+        if (MergeInto(current, incoming))
         {
-            var v2 = PopLast(state);
-            var v1 = PopLast(state);
-            state.Stack.Add(v1);
-            state.Stack.Add(v2);
-            state.Stack.Add(v1);
-            state.Stack.Add(v2);
-        }
-
-        return Effect.Continue;
-    }
-
-    private static Effect ApplyDup2X1(FrameState state)
-    {
-        if (state.Stack.Count >= 1 && IsStackTopWide(state))
-        {
-            if (state.Stack.Count < 3) return Effect.Continue;
-            var v1 = PopLast(state);
-            var v2 = PopLast(state);
-            var v3 = PopLast(state);
-            state.Stack.Add(v2);
-            state.Stack.Add(v1);
-            state.Stack.Add(v3);
-            state.Stack.Add(v2);
-            state.Stack.Add(v1);
-            return Effect.Continue;
-        }
-
-        if (state.Stack.Count >= 3)
-        {
-            var v2 = PopLast(state);
-            var v1 = PopLast(state);
-            var v3 = PopLast(state);
-            state.Stack.Add(v1);
-            state.Stack.Add(v2);
-            state.Stack.Add(v3);
-            state.Stack.Add(v1);
-            state.Stack.Add(v2);
-        }
-
-        return Effect.Continue;
-    }
-
-    private static Effect ApplyDup2X2(FrameState state)
-    {
-        if (state.Stack.Count >= 1 && IsStackTopWide(state))
-        {
-            if (state.Stack.Count < 3) return Effect.Continue;
-            if (state.Stack.Count >= 3 && IsSecondStackTopWide(state))
-            {
-                var v1 = PopLast(state);
-                var v2 = PopLast(state);
-                var v3 = PopLast(state);
-                var v4 = PopLast(state);
-                state.Stack.Add(v2);
-                state.Stack.Add(v1);
-                state.Stack.Add(v4);
-                state.Stack.Add(v3);
-                state.Stack.Add(v2);
-                state.Stack.Add(v1);
-                return Effect.Continue;
-            }
-
-            var v1a = PopLast(state);
-            var v2a = PopLast(state);
-            var v3a = PopLast(state);
-            state.Stack.Add(v2a);
-            state.Stack.Add(v1a);
-            state.Stack.Add(v3a);
-            state.Stack.Add(v2a);
-            state.Stack.Add(v1a);
-            return Effect.Continue;
-        }
-
-        if (state.Stack.Count >= 3 && IsStackTopWideAtDepth(state, 3))
-        {
-            if (state.Stack.Count < 4) return Effect.Continue;
-            var v1 = PopLast(state);
-            var v2 = PopLast(state);
-            var v3 = PopLast(state);
-            var v4 = PopLast(state);
-            state.Stack.Add(v1);
-            state.Stack.Add(v2);
-            state.Stack.Add(v4);
-            state.Stack.Add(v3);
-            state.Stack.Add(v1);
-            state.Stack.Add(v2);
-            return Effect.Continue;
-        }
-
-        if (state.Stack.Count >= 4)
-        {
-            var v2 = PopLast(state);
-            var v1 = PopLast(state);
-            var v4 = PopLast(state);
-            var v3 = PopLast(state);
-            state.Stack.Add(v1);
-            state.Stack.Add(v2);
-            state.Stack.Add(v3);
-            state.Stack.Add(v4);
-            state.Stack.Add(v1);
-            state.Stack.Add(v2);
-        }
-
-        return Effect.Continue;
-    }
-
-    private static JvmType PopLast(FrameState state)
-    {
-        var v = state.Stack[^1];
-        state.Stack.RemoveAt(state.Stack.Count - 1);
-        return v;
-    }
-
-    private static bool IsStackTopWide(FrameState state)
-    {
-        return state.Stack.Count >= 2
-            && state.Stack[^2] is { Kind: JvmKind.Long or JvmKind.Double }
-            && state.Stack[^1].Kind == JvmKind.Top;
-    }
-
-    private static bool IsSecondStackTopWide(FrameState state)
-    {
-        return state.Stack.Count >= 4
-            && state.Stack[^4] is { Kind: JvmKind.Long or JvmKind.Double }
-            && state.Stack[^3].Kind == JvmKind.Top;
-    }
-
-    private static bool IsStackTopWideAtDepth(FrameState state, int depth)
-    {
-        var baseIndex = state.Stack.Count - depth;
-        return baseIndex >= 1
-            && state.Stack[baseIndex - 1] is { Kind: JvmKind.Long or JvmKind.Double }
-            && state.Stack[baseIndex].Kind == JvmKind.Top;
-    }
-
-    private static JvmType FieldTypeToJvm(string? descriptor)
-    {
-        if (descriptor == null) return JvmType.Top;
-        return descriptor switch
-        {
-            "J" => JvmType.Long,
-            "D" => JvmType.Double,
-            "F" => JvmType.Float,
-            "I" or "Z" or "B" or "C" or "S" => JvmType.Int,
-            _ => JvmType.Top
-        };
-    }
-
-    private static void PopArgs(FrameState state, string descriptor)
-    {
-        var methodDesc = DescriptorParser.ParseMethod(descriptor);
-        for (var i = methodDesc.Parameters.Length - 1; i >= 0; i--)
-        {
-            var param = methodDesc.Parameters[i];
-            if (param.Tag == DescriptorTag.Long || param.Tag == DescriptorTag.Double)
-            {
-                state.PopWide();
-            }
-            else
-            {
-                state.Pop();
-            }
+            worklist.Enqueue(pc);
         }
     }
 
-    private static Effect PushReturn(FrameState state, string descriptor)
+    private bool MergeInto(FrameState target, FrameState source)
     {
-        var methodDesc = DescriptorParser.ParseMethod(descriptor);
-        var retType = methodDesc.ReturnType;
-
-        if (retType.Tag == DescriptorTag.Void) return Effect.Continue;
-
-        var jvmType = TypeDescriptorToJvm(retType);
-        if (retType.Tag == DescriptorTag.Long || retType.Tag == DescriptorTag.Double)
+        if (target.Stack.Count != source.Stack.Count)
         {
-            return state.PushWide(jvmType);
+            throw new InvalidOperationException(
+                "Control-flow paths reach the same instruction with different stack heights.");
         }
 
-        return state.Push(jvmType);
-    }
-
-    private static bool IsWideDesc(string? desc)
-    {
-        return desc == "J" || desc == "D";
-    }
-
-    private static int GetVarIndex(Instruction insn)
-    {
-        if (insn is VarInstruction v) return v.VarIndex;
-        if (insn.OpCode >= OperationCode.ILOAD_0 && insn.OpCode <= OperationCode.ILOAD_3) return insn.OpCode - OperationCode.ILOAD_0;
-        if (insn.OpCode >= OperationCode.LLOAD_0 && insn.OpCode <= OperationCode.LLOAD_3) return insn.OpCode - OperationCode.LLOAD_0;
-        if (insn.OpCode >= OperationCode.FLOAD_0 && insn.OpCode <= OperationCode.FLOAD_3) return insn.OpCode - OperationCode.FLOAD_0;
-        if (insn.OpCode >= OperationCode.DLOAD_0 && insn.OpCode <= OperationCode.DLOAD_3) return insn.OpCode - OperationCode.DLOAD_0;
-        if (insn.OpCode >= OperationCode.ALOAD_0 && insn.OpCode <= OperationCode.ALOAD_3) return insn.OpCode - OperationCode.ALOAD_0;
-        return 0;
-    }
-
-    private static int GetStoreVarIndex(Instruction insn)
-    {
-        if (insn is VarInstruction v) return v.VarIndex;
-        if (insn.OpCode >= OperationCode.ISTORE_0 && insn.OpCode <= OperationCode.ISTORE_3) return insn.OpCode - OperationCode.ISTORE_0;
-        if (insn.OpCode >= OperationCode.LSTORE_0 && insn.OpCode <= OperationCode.LSTORE_3) return insn.OpCode - OperationCode.LSTORE_0;
-        if (insn.OpCode >= OperationCode.FSTORE_0 && insn.OpCode <= OperationCode.FSTORE_3) return insn.OpCode - OperationCode.FSTORE_0;
-        if (insn.OpCode >= OperationCode.DSTORE_0 && insn.OpCode <= OperationCode.DSTORE_3) return insn.OpCode - OperationCode.DSTORE_0;
-        if (insn.OpCode >= OperationCode.ASTORE_0 && insn.OpCode <= OperationCode.ASTORE_3) return insn.OpCode - OperationCode.ASTORE_0;
-        return 0;
-    }
-
-    private static FrameState InitLocals(string descriptor, bool isStatic)
-    {
-        var state = new FrameState();
-        var methodDesc = DescriptorParser.ParseMethod(descriptor);
-
-        if (!isStatic)
-        {
-            state.Locals.Add(new JvmUninitializedThis());
-        }
-
-        foreach (var param in methodDesc.Parameters)
-        {
-            var type = TypeDescriptorToJvm(param);
-            state.Locals.Add(type);
-
-            if (param.Tag == DescriptorTag.Long || param.Tag == DescriptorTag.Double)
-            {
-                state.Locals.Add(JvmType.Top);
-            }
-        }
-
-        return state;
-    }
-
-    private static JvmType TypeDescriptorToJvm(TypeDescriptor td)
-    {
-        if (td.IsArray)
-        {
-            return new JvmObject(td.ToString());
-        }
-
-        if (td.IsObject)
-        {
-            return new JvmObject(td.InternalName!);
-        }
-
-        return td.Tag switch
-        {
-            DescriptorTag.Boolean or DescriptorTag.Byte or DescriptorTag.Char
-                or DescriptorTag.Int or DescriptorTag.Short => JvmType.Int,
-            DescriptorTag.Float => JvmType.Float,
-            DescriptorTag.Long => JvmType.Long,
-            DescriptorTag.Double => JvmType.Double,
-            _ => JvmType.Top
-        };
-    }
-
-    private void SetFrame(int pc, FrameState state)
-    {
-        if (!_frames.ContainsKey(pc))
-        {
-            _frames[pc] = state.Clone();
-        }
-    }
-
-    private static bool MergeInto(FrameState target, FrameState source)
-    {
-        if (target.Stack.Count != source.Stack.Count) return false;
-
-        while (target.Locals.Count < source.Locals.Count)
+        var localCount = Math.Max(target.Locals.Count, source.Locals.Count);
+        while (target.Locals.Count < localCount)
         {
             target.Locals.Add(JvmType.Top);
         }
 
-        while (source.Locals.Count < target.Locals.Count)
-        {
-            source.Locals.Add(JvmType.Top);
-        }
-
         var changed = false;
-        for (var i = 0; i < target.Locals.Count; i++)
+        for (var i = 0; i < localCount; i++)
         {
-            var merged = MergeTypes(target.Locals[i], source.Locals[i]);
+            var sourceType = i < source.Locals.Count ? source.Locals[i] : JvmType.Top;
+            var merged = MergeTypes(target.Locals[i], sourceType);
             if (!merged.Equals(target.Locals[i]))
             {
                 target.Locals[i] = merged;
@@ -855,53 +258,916 @@ public class StackFrameCalculator
         return changed;
     }
 
-    private static JvmType MergeTypes(JvmType a, JvmType b)
+    private JvmType MergeTypes(JvmType first, JvmType second)
     {
-        if (a.Equals(b)) return a;
-        if (a == JvmType.Top) return b;
-        if (b == JvmType.Top) return a;
-        if (a == JvmType.Null && b is JvmObject) return b;
-        if (b == JvmType.Null && a is JvmObject) return a;
-        if (a is JvmObject oa && b is JvmObject ob)
+        if (first.Equals(second))
         {
-            if (oa.TypeName == ob.TypeName) return a;
-            return new JvmObject("java/lang/Object");
+            return first;
+        }
+
+        if (first.Kind == JvmKind.Top || second.Kind == JvmKind.Top)
+        {
+            return JvmType.Top;
+        }
+
+        if (first.Kind == JvmKind.Null && second is JvmObject)
+        {
+            return second;
+        }
+
+        if (second.Kind == JvmKind.Null && first is JvmObject)
+        {
+            return first;
+        }
+
+        if (first is JvmObject firstObject && second is JvmObject secondObject)
+        {
+            if (firstObject.TypeName == secondObject.TypeName)
+            {
+                return first;
+            }
+
+            var commonType = _body.CommonSuperTypeResolver?.Invoke(
+                firstObject.TypeName,
+                secondObject.TypeName);
+            return new JvmObject(commonType ?? "java/lang/Object");
         }
 
         return JvmType.Top;
     }
 
-    private Dictionary<int, int> BuildInstructionIndex()
+    private void ApplyEffect(Instruction instruction, FrameState state)
     {
-        var index = new Dictionary<int, int>();
-        for (var i = 0; i < _body.Instructions.Count; i++)
+        switch (instruction.OpCode)
         {
-            var insn = _body.Instructions[i];
-            if (insn.Offset.HasValue)
+            case OperationCode.NOP:
+            case OperationCode.IINC:
+            case OperationCode.GOTO:
+            case OperationCode.GOTO_W:
+                return;
+
+            case OperationCode.ACONST_NULL:
+                state.Push(JvmType.Null);
+                return;
+
+            case OperationCode.ICONST_M1:
+            case >= OperationCode.ICONST_0 and <= OperationCode.ICONST_5:
+            case OperationCode.BIPUSH:
+            case OperationCode.SIPUSH:
+                state.Push(JvmType.Int);
+                return;
+
+            case OperationCode.LCONST_0:
+            case OperationCode.LCONST_1:
+                state.Push(JvmType.Long);
+                return;
+
+            case OperationCode.FCONST_0:
+            case OperationCode.FCONST_1:
+            case OperationCode.FCONST_2:
+                state.Push(JvmType.Float);
+                return;
+
+            case OperationCode.DCONST_0:
+            case OperationCode.DCONST_1:
+                state.Push(JvmType.Double);
+                return;
+
+            case OperationCode.LDC:
+            case OperationCode.LDC_W:
+            case OperationCode.LDC2_W:
+                ApplyLdc((LdcInstruction)instruction, state);
+                return;
+
+            case OperationCode.ILOAD:
+            case >= OperationCode.ILOAD_0 and <= OperationCode.ILOAD_3:
+                state.Push(JvmType.Int);
+                return;
+
+            case OperationCode.LLOAD:
+            case >= OperationCode.LLOAD_0 and <= OperationCode.LLOAD_3:
+                state.Push(JvmType.Long);
+                return;
+
+            case OperationCode.FLOAD:
+            case >= OperationCode.FLOAD_0 and <= OperationCode.FLOAD_3:
+                state.Push(JvmType.Float);
+                return;
+
+            case OperationCode.DLOAD:
+            case >= OperationCode.DLOAD_0 and <= OperationCode.DLOAD_3:
+                state.Push(JvmType.Double);
+                return;
+
+            case OperationCode.ALOAD:
+            case >= OperationCode.ALOAD_0 and <= OperationCode.ALOAD_3:
+                state.Push(GetLocal(state, GetVariableIndex(instruction)));
+                return;
+
+            case OperationCode.IALOAD:
+            case OperationCode.BALOAD:
+            case OperationCode.CALOAD:
+            case OperationCode.SALOAD:
+                state.Pop(2);
+                state.Push(JvmType.Int);
+                return;
+
+            case OperationCode.LALOAD:
+                state.Pop(2);
+                state.Push(JvmType.Long);
+                return;
+
+            case OperationCode.FALOAD:
+                state.Pop(2);
+                state.Push(JvmType.Float);
+                return;
+
+            case OperationCode.DALOAD:
+                state.Pop(2);
+                state.Push(JvmType.Double);
+                return;
+
+            case OperationCode.AALOAD:
             {
-                index[insn.Offset.Value] = i;
+                state.Pop();
+                var array = state.Pop();
+                state.Push(GetArrayComponentType(array));
+                return;
+            }
+
+            case OperationCode.ISTORE:
+            case >= OperationCode.ISTORE_0 and <= OperationCode.ISTORE_3:
+                state.Pop();
+                SetLocal(state, GetVariableIndex(instruction), JvmType.Int);
+                return;
+
+            case OperationCode.LSTORE:
+            case >= OperationCode.LSTORE_0 and <= OperationCode.LSTORE_3:
+                state.Pop();
+                SetWideLocal(state, GetVariableIndex(instruction), JvmType.Long);
+                return;
+
+            case OperationCode.FSTORE:
+            case >= OperationCode.FSTORE_0 and <= OperationCode.FSTORE_3:
+                state.Pop();
+                SetLocal(state, GetVariableIndex(instruction), JvmType.Float);
+                return;
+
+            case OperationCode.DSTORE:
+            case >= OperationCode.DSTORE_0 and <= OperationCode.DSTORE_3:
+                state.Pop();
+                SetWideLocal(state, GetVariableIndex(instruction), JvmType.Double);
+                return;
+
+            case OperationCode.ASTORE:
+            case >= OperationCode.ASTORE_0 and <= OperationCode.ASTORE_3:
+                SetLocal(state, GetVariableIndex(instruction), state.Pop());
+                return;
+
+            case OperationCode.IASTORE:
+            case OperationCode.LASTORE:
+            case OperationCode.FASTORE:
+            case OperationCode.DASTORE:
+            case OperationCode.AASTORE:
+            case OperationCode.BASTORE:
+            case OperationCode.CASTORE:
+            case OperationCode.SASTORE:
+                state.Pop(3);
+                return;
+
+            case OperationCode.POP:
+                RequireCategory1(state.Pop(), instruction.OpCode);
+                return;
+
+            case OperationCode.POP2:
+                ApplyPop2(state);
+                return;
+
+            case OperationCode.DUP:
+                ApplyDup(state);
+                return;
+
+            case OperationCode.DUP_X1:
+                ApplyDupX1(state);
+                return;
+
+            case OperationCode.DUP_X2:
+                ApplyDupX2(state);
+                return;
+
+            case OperationCode.DUP2:
+                ApplyDup2(state);
+                return;
+
+            case OperationCode.DUP2_X1:
+                ApplyDup2X1(state);
+                return;
+
+            case OperationCode.DUP2_X2:
+                ApplyDup2X2(state);
+                return;
+
+            case OperationCode.SWAP:
+                ApplySwap(state);
+                return;
+
+            case OperationCode.IADD:
+            case OperationCode.ISUB:
+            case OperationCode.IMUL:
+            case OperationCode.IDIV:
+            case OperationCode.IREM:
+            case OperationCode.ISHL:
+            case OperationCode.ISHR:
+            case OperationCode.IUSHR:
+            case OperationCode.IAND:
+            case OperationCode.IOR:
+            case OperationCode.IXOR:
+                PopAndPush(state, 2, JvmType.Int);
+                return;
+
+            case OperationCode.LADD:
+            case OperationCode.LSUB:
+            case OperationCode.LMUL:
+            case OperationCode.LDIV:
+            case OperationCode.LREM:
+            case OperationCode.LAND:
+            case OperationCode.LOR:
+            case OperationCode.LXOR:
+                PopAndPush(state, 2, JvmType.Long);
+                return;
+
+            case OperationCode.LSHL:
+            case OperationCode.LSHR:
+            case OperationCode.LUSHR:
+                PopAndPush(state, 2, JvmType.Long);
+                return;
+
+            case OperationCode.FADD:
+            case OperationCode.FSUB:
+            case OperationCode.FMUL:
+            case OperationCode.FDIV:
+            case OperationCode.FREM:
+                PopAndPush(state, 2, JvmType.Float);
+                return;
+
+            case OperationCode.DADD:
+            case OperationCode.DSUB:
+            case OperationCode.DMUL:
+            case OperationCode.DDIV:
+            case OperationCode.DREM:
+                PopAndPush(state, 2, JvmType.Double);
+                return;
+
+            case OperationCode.INEG:
+            case OperationCode.I2B:
+            case OperationCode.I2C:
+            case OperationCode.I2S:
+                PopAndPush(state, 1, JvmType.Int);
+                return;
+
+            case OperationCode.LNEG:
+                PopAndPush(state, 1, JvmType.Long);
+                return;
+
+            case OperationCode.FNEG:
+                PopAndPush(state, 1, JvmType.Float);
+                return;
+
+            case OperationCode.DNEG:
+                PopAndPush(state, 1, JvmType.Double);
+                return;
+
+            case OperationCode.I2L:
+            case OperationCode.F2L:
+            case OperationCode.D2L:
+                PopAndPush(state, 1, JvmType.Long);
+                return;
+
+            case OperationCode.I2F:
+            case OperationCode.L2F:
+            case OperationCode.D2F:
+                PopAndPush(state, 1, JvmType.Float);
+                return;
+
+            case OperationCode.I2D:
+            case OperationCode.L2D:
+            case OperationCode.F2D:
+                PopAndPush(state, 1, JvmType.Double);
+                return;
+
+            case OperationCode.L2I:
+            case OperationCode.F2I:
+            case OperationCode.D2I:
+                PopAndPush(state, 1, JvmType.Int);
+                return;
+
+            case OperationCode.LCMP:
+            case OperationCode.FCMPL:
+            case OperationCode.FCMPG:
+            case OperationCode.DCMPL:
+            case OperationCode.DCMPG:
+                PopAndPush(state, 2, JvmType.Int);
+                return;
+
+            case OperationCode.IFEQ:
+            case OperationCode.IFNE:
+            case OperationCode.IFLT:
+            case OperationCode.IFGE:
+            case OperationCode.IFGT:
+            case OperationCode.IFLE:
+            case OperationCode.IFNULL:
+            case OperationCode.IFNONNULL:
+                state.Pop();
+                return;
+
+            case OperationCode.IF_ICMPEQ:
+            case OperationCode.IF_ICMPNE:
+            case OperationCode.IF_ICMPLT:
+            case OperationCode.IF_ICMPGE:
+            case OperationCode.IF_ICMPGT:
+            case OperationCode.IF_ICMPLE:
+            case OperationCode.IF_ACMPEQ:
+            case OperationCode.IF_ACMPNE:
+                state.Pop(2);
+                return;
+
+            case OperationCode.TABLESWITCH:
+            case OperationCode.LOOKUPSWITCH:
+                state.Pop();
+                return;
+
+            case OperationCode.IRETURN:
+            case OperationCode.LRETURN:
+            case OperationCode.FRETURN:
+            case OperationCode.DRETURN:
+            case OperationCode.ARETURN:
+            case OperationCode.ATHROW:
+                state.Pop();
+                return;
+
+            case OperationCode.RETURN:
+                return;
+
+            case OperationCode.GETSTATIC:
+                state.Push(FieldTypeToJvm(((FieldInstruction)instruction).Descriptor));
+                return;
+
+            case OperationCode.PUTSTATIC:
+                state.Pop();
+                return;
+
+            case OperationCode.GETFIELD:
+            {
+                var field = (FieldInstruction)instruction;
+                state.Pop();
+                state.Push(FieldTypeToJvm(field.Descriptor));
+                return;
+            }
+
+            case OperationCode.PUTFIELD:
+                state.Pop(2);
+                return;
+
+            case OperationCode.INVOKEVIRTUAL:
+            case OperationCode.INVOKESPECIAL:
+            case OperationCode.INVOKESTATIC:
+            case OperationCode.INVOKEINTERFACE:
+                ApplyMethodInvocation((MethodInstruction)instruction, state);
+                return;
+
+            case OperationCode.INVOKEDYNAMIC:
+                ApplyInvokeDynamic((InvokeDynamicInstruction)instruction, state);
+                return;
+
+            case OperationCode.NEW:
+                state.Push(new JvmUninitialized(instruction.Offset!.Value));
+                return;
+
+            case OperationCode.NEWARRAY:
+            {
+                state.Pop();
+                var arrayType = ((IntInstruction)instruction).Value switch
+                {
+                    4 => "[Z",
+                    5 => "[C",
+                    6 => "[F",
+                    7 => "[D",
+                    8 => "[B",
+                    9 => "[S",
+                    10 => "[I",
+                    11 => "[J",
+                    _ => throw new InvalidOperationException("Invalid NEWARRAY type code.")
+                };
+                state.Push(new JvmObject(arrayType));
+                return;
+            }
+
+            case OperationCode.ANEWARRAY:
+            {
+                state.Pop();
+                var type = ((TypeInstruction)instruction).Type
+                    ?? throw new InvalidOperationException("ANEWARRAY type is unresolved.");
+                var arrayType = type.StartsWith("[", StringComparison.Ordinal)
+                    ? $"[{type}"
+                    : $"[L{type};";
+                state.Push(new JvmObject(arrayType));
+                return;
+            }
+
+            case OperationCode.ARRAYLENGTH:
+                PopAndPush(state, 1, JvmType.Int);
+                return;
+
+            case OperationCode.CHECKCAST:
+            {
+                state.Pop();
+                var type = ((TypeInstruction)instruction).Type
+                    ?? throw new InvalidOperationException("CHECKCAST type is unresolved.");
+                state.Push(new JvmObject(type));
+                return;
+            }
+
+            case OperationCode.INSTANCEOF:
+                PopAndPush(state, 1, JvmType.Int);
+                return;
+
+            case OperationCode.MONITORENTER:
+            case OperationCode.MONITOREXIT:
+                state.Pop();
+                return;
+
+            case OperationCode.MULTIANEWARRAY:
+            {
+                var multiArray = (MultiANewArrayInstruction)instruction;
+                state.Pop(multiArray.Dimensions);
+                state.Push(new JvmObject(
+                    multiArray.Type
+                    ?? throw new InvalidOperationException("MULTIANEWARRAY type is unresolved.")));
+                return;
+            }
+
+            case OperationCode.JSR:
+            case OperationCode.JSR_W:
+            case OperationCode.RET:
+                throw new NotSupportedException(
+                    "Stack map calculation does not support legacy JSR/RET subroutines.");
+
+            default:
+                throw new NotSupportedException(
+                    $"Stack effect for opcode {instruction.OpCode} is not implemented.");
+        }
+    }
+
+    private static void ApplyLdc(LdcInstruction instruction, FrameState state)
+    {
+        var type = instruction.Value switch
+        {
+            int => JvmType.Int,
+            float => JvmType.Float,
+            long => JvmType.Long,
+            double => JvmType.Double,
+            string => new JvmObject("java/lang/String"),
+            _ when instruction.StackDescriptor is not null =>
+                FieldTypeToJvm(instruction.StackDescriptor),
+            _ when instruction.OpCode == OperationCode.LDC2_W => JvmType.Long,
+            _ => new JvmObject("java/lang/Object")
+        };
+        state.Push(type);
+    }
+
+    private void ApplyMethodInvocation(MethodInstruction instruction, FrameState state)
+    {
+        var descriptor = instruction.Descriptor
+            ?? throw new InvalidOperationException("Method descriptor is unresolved.");
+        var parsedDescriptor = DescriptorParser.ParseMethod(descriptor);
+        state.Pop(parsedDescriptor.Parameters.Length);
+
+        JvmType? receiver = null;
+        if (instruction.OpCode != OperationCode.INVOKESTATIC)
+        {
+            receiver = state.Pop();
+        }
+
+        if (instruction.OpCode == OperationCode.INVOKESPECIAL
+            && instruction.Name == "<init>"
+            && receiver is not null)
+        {
+            var initializedName = receiver is JvmUninitializedThis
+                ? _body.OwnerInternalName
+                : instruction.Owner;
+            var initializedType = new JvmObject(
+                initializedName
+                ?? throw new InvalidOperationException("Constructor owner is unresolved."));
+            state.Replace(receiver, initializedType);
+        }
+
+        PushReturnType(state, parsedDescriptor.ReturnType);
+    }
+
+    private static void ApplyInvokeDynamic(
+        InvokeDynamicInstruction instruction,
+        FrameState state)
+    {
+        var descriptor = instruction.Descriptor
+            ?? throw new InvalidOperationException("InvokeDynamic descriptor is unresolved.");
+        var parsedDescriptor = DescriptorParser.ParseMethod(descriptor);
+        state.Pop(parsedDescriptor.Parameters.Length);
+        PushReturnType(state, parsedDescriptor.ReturnType);
+    }
+
+    private static void PushReturnType(FrameState state, TypeDescriptor returnType)
+    {
+        if (returnType.Tag != DescriptorTag.Void)
+        {
+            state.Push(TypeDescriptorToJvm(returnType));
+        }
+    }
+
+    private static JvmType GetLocal(FrameState state, int index)
+    {
+        if (index < 0 || index >= state.Locals.Count)
+        {
+            throw new InvalidOperationException($"Local variable {index} has no frame type.");
+        }
+
+        return state.Locals[index];
+    }
+
+    private static void SetLocal(FrameState state, int index, JvmType type)
+    {
+        InvalidateOverlappingWideLocal(state, index);
+        state.SetLocal(index, type);
+    }
+
+    private static void SetWideLocal(FrameState state, int index, JvmType type)
+    {
+        InvalidateOverlappingWideLocal(state, index);
+        state.SetLocal(index, type);
+        state.SetLocal(index + 1, JvmType.Top);
+    }
+
+    private static void InvalidateOverlappingWideLocal(FrameState state, int index)
+    {
+        if (index > 0
+            && index - 1 < state.Locals.Count
+            && IsCategory2(state.Locals[index - 1]))
+        {
+            state.Locals[index - 1] = JvmType.Top;
+        }
+    }
+
+    private static void PopAndPush(FrameState state, int popCount, JvmType type)
+    {
+        state.Pop(popCount);
+        state.Push(type);
+    }
+
+    private static void ApplyPop2(FrameState state)
+    {
+        var first = state.Pop();
+        if (!IsCategory2(first))
+        {
+            RequireCategory1(state.Pop(), OperationCode.POP2);
+        }
+    }
+
+    private static void ApplyDup(FrameState state)
+    {
+        var value = state.Peek();
+        RequireCategory1(value, OperationCode.DUP);
+        state.Push(value);
+    }
+
+    private static void ApplyDupX1(FrameState state)
+    {
+        var value1 = state.Pop();
+        var value2 = state.Pop();
+        RequireCategory1(value1, OperationCode.DUP_X1);
+        RequireCategory1(value2, OperationCode.DUP_X1);
+        state.Push(value1);
+        state.Push(value2);
+        state.Push(value1);
+    }
+
+    private static void ApplyDupX2(FrameState state)
+    {
+        var value1 = state.Pop();
+        RequireCategory1(value1, OperationCode.DUP_X2);
+        var value2 = state.Pop();
+
+        if (IsCategory2(value2))
+        {
+            state.Push(value1);
+            state.Push(value2);
+            state.Push(value1);
+            return;
+        }
+
+        var value3 = state.Pop();
+        RequireCategory1(value2, OperationCode.DUP_X2);
+        RequireCategory1(value3, OperationCode.DUP_X2);
+        state.Push(value1);
+        state.Push(value3);
+        state.Push(value2);
+        state.Push(value1);
+    }
+
+    private static void ApplyDup2(FrameState state)
+    {
+        var value1 = state.Pop();
+        if (IsCategory2(value1))
+        {
+            state.Push(value1);
+            state.Push(value1);
+            return;
+        }
+
+        var value2 = state.Pop();
+        RequireCategory1(value2, OperationCode.DUP2);
+        state.Push(value2);
+        state.Push(value1);
+        state.Push(value2);
+        state.Push(value1);
+    }
+
+    private static void ApplyDup2X1(FrameState state)
+    {
+        var value1 = state.Pop();
+        if (IsCategory2(value1))
+        {
+            var value2 = state.Pop();
+            RequireCategory1(value2, OperationCode.DUP2_X1);
+            state.Push(value1);
+            state.Push(value2);
+            state.Push(value1);
+            return;
+        }
+
+        var value2Category1 = state.Pop();
+        var value3 = state.Pop();
+        RequireCategory1(value1, OperationCode.DUP2_X1);
+        RequireCategory1(value2Category1, OperationCode.DUP2_X1);
+        RequireCategory1(value3, OperationCode.DUP2_X1);
+        state.Push(value2Category1);
+        state.Push(value1);
+        state.Push(value3);
+        state.Push(value2Category1);
+        state.Push(value1);
+    }
+
+    private static void ApplyDup2X2(FrameState state)
+    {
+        var value1 = state.Pop();
+        if (IsCategory2(value1))
+        {
+            var value2 = state.Pop();
+            if (IsCategory2(value2))
+            {
+                state.Push(value1);
+                state.Push(value2);
+                state.Push(value1);
+                return;
+            }
+
+            var value3 = state.Pop();
+            RequireCategory1(value2, OperationCode.DUP2_X2);
+            RequireCategory1(value3, OperationCode.DUP2_X2);
+            state.Push(value1);
+            state.Push(value3);
+            state.Push(value2);
+            state.Push(value1);
+            return;
+        }
+
+        var value2Category1 = state.Pop();
+        RequireCategory1(value1, OperationCode.DUP2_X2);
+        RequireCategory1(value2Category1, OperationCode.DUP2_X2);
+        var value3Category = state.Pop();
+        if (IsCategory2(value3Category))
+        {
+            state.Push(value2Category1);
+            state.Push(value1);
+            state.Push(value3Category);
+            state.Push(value2Category1);
+            state.Push(value1);
+            return;
+        }
+
+        var value4 = state.Pop();
+        RequireCategory1(value3Category, OperationCode.DUP2_X2);
+        RequireCategory1(value4, OperationCode.DUP2_X2);
+        state.Push(value2Category1);
+        state.Push(value1);
+        state.Push(value4);
+        state.Push(value3Category);
+        state.Push(value2Category1);
+        state.Push(value1);
+    }
+
+    private static void ApplySwap(FrameState state)
+    {
+        var value1 = state.Pop();
+        var value2 = state.Pop();
+        RequireCategory1(value1, OperationCode.SWAP);
+        RequireCategory1(value2, OperationCode.SWAP);
+        state.Push(value1);
+        state.Push(value2);
+    }
+
+    private static void RequireCategory1(JvmType type, OperationCode opCode)
+    {
+        if (IsCategory2(type))
+        {
+            throw new InvalidOperationException($"{opCode} requires category 1 stack values.");
+        }
+    }
+
+    private static bool IsCategory2(JvmType type)
+    {
+        return type.Kind is JvmKind.Long or JvmKind.Double;
+    }
+
+    private static JvmType GetArrayComponentType(JvmType array)
+    {
+        if (array is not JvmObject { TypeName: ['[', ..] } arrayType)
+        {
+            return new JvmObject("java/lang/Object");
+        }
+
+        var componentDescriptor = arrayType.TypeName[1..];
+        return componentDescriptor[0] switch
+        {
+            '[' => new JvmObject(componentDescriptor),
+            'L' => new JvmObject(componentDescriptor[1..^1]),
+            'F' => JvmType.Float,
+            'J' => JvmType.Long,
+            'D' => JvmType.Double,
+            _ => JvmType.Int
+        };
+    }
+
+    private static JvmType FieldTypeToJvm(string? descriptor)
+    {
+        if (string.IsNullOrEmpty(descriptor))
+        {
+            return JvmType.Top;
+        }
+
+        return TypeDescriptorToJvm(DescriptorParser.ParseType(descriptor));
+    }
+
+    private static JvmType TypeDescriptorToJvm(TypeDescriptor descriptor)
+    {
+        if (descriptor.IsArray)
+        {
+            return new JvmObject(descriptor.ToString());
+        }
+
+        if (descriptor.IsObject)
+        {
+            return new JvmObject(descriptor.InternalName!);
+        }
+
+        return descriptor.Tag switch
+        {
+            DescriptorTag.Boolean
+                or DescriptorTag.Byte
+                or DescriptorTag.Char
+                or DescriptorTag.Int
+                or DescriptorTag.Short => JvmType.Int,
+            DescriptorTag.Float => JvmType.Float,
+            DescriptorTag.Long => JvmType.Long,
+            DescriptorTag.Double => JvmType.Double,
+            _ => JvmType.Top
+        };
+    }
+
+    private FrameState CreateInitialState(string descriptor, bool isStatic)
+    {
+        var state = new FrameState();
+        if (!isStatic)
+        {
+            state.Locals.Add(_body.MethodName == "<init>"
+                ? new JvmUninitializedThis()
+                : new JvmObject(_body.OwnerInternalName ?? "java/lang/Object"));
+        }
+
+        foreach (var parameter in DescriptorParser.ParseMethod(descriptor).Parameters)
+        {
+            var type = TypeDescriptorToJvm(parameter);
+            state.Locals.Add(type);
+            if (IsCategory2(type))
+            {
+                state.Locals.Add(JvmType.Top);
             }
         }
 
-        return index;
+        return state;
+    }
+
+    private static int GetVariableIndex(Instruction instruction)
+    {
+        if (instruction is VarInstruction variableInstruction)
+        {
+            return variableInstruction.VarIndex;
+        }
+
+        return instruction.OpCode switch
+        {
+            >= OperationCode.ILOAD_0 and <= OperationCode.ILOAD_3 =>
+                instruction.OpCode - OperationCode.ILOAD_0,
+            >= OperationCode.LLOAD_0 and <= OperationCode.LLOAD_3 =>
+                instruction.OpCode - OperationCode.LLOAD_0,
+            >= OperationCode.FLOAD_0 and <= OperationCode.FLOAD_3 =>
+                instruction.OpCode - OperationCode.FLOAD_0,
+            >= OperationCode.DLOAD_0 and <= OperationCode.DLOAD_3 =>
+                instruction.OpCode - OperationCode.DLOAD_0,
+            >= OperationCode.ALOAD_0 and <= OperationCode.ALOAD_3 =>
+                instruction.OpCode - OperationCode.ALOAD_0,
+            >= OperationCode.ISTORE_0 and <= OperationCode.ISTORE_3 =>
+                instruction.OpCode - OperationCode.ISTORE_0,
+            >= OperationCode.LSTORE_0 and <= OperationCode.LSTORE_3 =>
+                instruction.OpCode - OperationCode.LSTORE_0,
+            >= OperationCode.FSTORE_0 and <= OperationCode.FSTORE_3 =>
+                instruction.OpCode - OperationCode.FSTORE_0,
+            >= OperationCode.DSTORE_0 and <= OperationCode.DSTORE_3 =>
+                instruction.OpCode - OperationCode.DSTORE_0,
+            >= OperationCode.ASTORE_0 and <= OperationCode.ASTORE_3 =>
+                instruction.OpCode - OperationCode.ASTORE_0,
+            _ => throw new InvalidOperationException(
+                $"Opcode {instruction.OpCode} does not reference a local variable.")
+        };
+    }
+
+    private int GetResolvedOffset(Label label)
+    {
+        if (label.Offset.HasValue)
+        {
+            return label.Offset.Value;
+        }
+
+        throw new InvalidOperationException($"Label '{label.Name}' is unresolved.");
+    }
+
+    private Dictionary<int, int> BuildInstructionIndex()
+    {
+        var result = new Dictionary<int, int>();
+        for (var i = 0; i < _body.Instructions.Count; i++)
+        {
+            var offset = _body.Instructions[i].Offset
+                ?? throw new InvalidOperationException("Instruction offset is unresolved.");
+            result.Add(offset, i);
+        }
+
+        return result;
     }
 
     private FullFrame BuildFullFrame(int offsetDelta, FrameState state)
     {
-        var locals = state.Locals.Select(ConvertType).ToArray();
-        var stack = state.Stack.Select(ConvertType).ToArray();
+        if (offsetDelta is < 0 or > ushort.MaxValue)
+        {
+            throw new InvalidOperationException(
+                $"Stack map offset_delta {offsetDelta} is outside the u2 range.");
+        }
+
         return new FullFrame(
             new TUShort((ushort)offsetDelta),
-            locals,
-            stack);
+            ConvertLocals(state.Locals),
+            state.Stack.Select(ConvertType).ToArray());
+    }
+
+    private VerificationTypeInfo[] ConvertLocals(IReadOnlyList<JvmType> locals)
+    {
+        var lastIndex = locals.Count - 1;
+        while (lastIndex >= 0 && locals[lastIndex].Kind == JvmKind.Top)
+        {
+            lastIndex--;
+        }
+
+        var result = new List<VerificationTypeInfo>();
+        for (var i = 0; i <= lastIndex; i++)
+        {
+            var type = locals[i];
+            result.Add(ConvertType(type));
+            if (IsCategory2(type)
+                && i + 1 <= lastIndex
+                && locals[i + 1].Kind == JvmKind.Top)
+            {
+                i++;
+            }
+        }
+
+        return result.ToArray();
     }
 
     private VerificationTypeInfo ConvertType(JvmType type)
     {
         return type switch
         {
-            JvmObject obj => new ObjectVariableInfo(new TUShort((ushort)_cp.AddClass(obj.TypeName))),
-            JvmUninitialized uninit => new UninitializedVariableInfo(new TUShort((ushort)uninit.NewOffset)),
+            JvmObject objectType => new ObjectVariableInfo(
+                new TUShort((ushort)_constantPool.AddClass(objectType.TypeName))),
+            JvmUninitialized uninitialized => new UninitializedVariableInfo(
+                new TUShort((ushort)uninitialized.NewOffset)),
             _ => type.Kind switch
             {
                 JvmKind.Int => new IntegerVariableInfo(),
@@ -915,4 +1181,3 @@ public class StackFrameCalculator
         };
     }
 }
-

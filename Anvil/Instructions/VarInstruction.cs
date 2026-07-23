@@ -20,14 +20,20 @@ public class VarInstruction : Instruction
                 nameof(opCode));
         }
 
+        if (varIndex < 0 || varIndex > ushort.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(varIndex),
+                varIndex,
+                "Local variable index must be between 0 and 65535.");
+        }
+
         VarIndex = varIndex;
     }
 
     private bool HasShortForm => VarIndex is >= 0 and <= 3 && GetTypeIndex() >= 0;
 
-    private bool NeedsWide => VarIndex > 0xFFFF
-        ? throw new ArgumentOutOfRangeException(nameof(VarIndex), $"VarIndex {VarIndex} exceeds maximum 65535.")
-        : VarIndex > 0xFF;
+    private bool NeedsWide => VarIndex > byte.MaxValue;
 
     private int GetTypeIndex()
     {
