@@ -14,6 +14,7 @@
         <PackageLicenseUrl>https://github.com/YELANDAOKONG/AnvilASM/raw/refs/heads/master/LICENSE</PackageLicenseUrl>
         <RepositoryUrl>https://github.com/YELANDAOKONG/AnvilASM/</RepositoryUrl>
         <Product>AnvilASM</Product>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
     </PropertyGroup>
 
     <ItemGroup>
@@ -27,6 +28,10 @@
       <Folder Include="IO\" />
       <Folder Include="Models\" />
       <Folder Include="Serialization\" />
+    </ItemGroup>
+    
+    <ItemGroup>
+        <None Include="README.md" Pack="true" PackagePath="\"/>
     </ItemGroup>
 
 </Project>
