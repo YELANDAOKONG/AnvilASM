@@ -1,0 +1,36 @@
+name: Package Release
+
+on:
+  push:
+    branches:
+      - release
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build NuGet package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore dependencies
+        run: dotnet restore Anvil/Anvil.csproj
+
+      - name: Build NuGet package
+        run: dotnet pack Anvil/Anvil.csproj --configuration Release --no-restore --output artifacts
+
+      - name: Upload NuGet package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnvilASM-nupkg
+          path: artifacts/*.nupkg
+          if-no-files-found: error
